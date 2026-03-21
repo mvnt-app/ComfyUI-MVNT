@@ -1,0 +1,69 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadAudio",
+      "pos": [100, 200],
+      "size": [300, 80],
+      "outputs": [
+        {"name": "AUDIO", "type": "AUDIO", "links": [1]}
+      ],
+      "widgets_values": ["input/my_song.wav"]
+    },
+    {
+      "id": 2,
+      "type": "MVNT Generate Dance",
+      "pos": [500, 200],
+      "size": [350, 260],
+      "inputs": [
+        {"name": "audio", "type": "AUDIO", "link": 1}
+      ],
+      "outputs": [
+        {"name": "motion_file_path", "type": "STRING", "links": [2]},
+        {"name": "generation_id", "type": "STRING", "links": [3]}
+      ],
+      "widgets_values": [
+        "All",
+        "",
+        "bvh",
+        -1,
+        2.0,
+        1.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": 3,
+      "type": "MVNT Load Motion",
+      "pos": [950, 200],
+      "size": [300, 80],
+      "inputs": [
+        {"name": "file_path", "type": "STRING", "link": 2}
+      ],
+      "outputs": [
+        {"name": "motion_data", "type": "STRING", "links": []}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "ShowText",
+      "pos": [950, 360],
+      "size": [300, 80],
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 3}
+      ]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "AUDIO"],
+    [2, 2, 0, 3, 0, "STRING"],
+    [3, 2, 1, 4, 0, "STRING"]
+  ],
+  "config": {},
+  "extra": {
+    "info": "MVNT Audio → Dance workflow. Load an audio file, generate dance motion via MVNT API, and view the resulting BVH data."
+  }
+}

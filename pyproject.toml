@@ -1,0 +1,16 @@
+[project]
+name = "comfyui-mvnt"
+description = "Generate AI dance choreography from music using the MVNT Motion API"
+version = "1.0.0"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31.0"]
+
+[project.urls]
+Repository = "https://github.com/nicejoonjung/ComfyUI-MVNT"
+Documentation = "https://mvnt.world/docs"
+
+[tool.comfy]
+PublisherId = ""  # TODO: fill in after creating publisher at https://registry.comfy.org
+DisplayName = "ComfyUI-MVNT"
+Icon = "https://mvnt.world/icon.png"
