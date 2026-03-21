@@ -7,6 +7,7 @@ from .nodes import (
     MVNTGenerateCharacter,
     MVNTExportVideo,
     MVNTLoadMotion,
+    MVNTPreviewBVH,
 )
 
 NODE_CLASS_MAPPINGS = {
@@ -16,6 +17,7 @@ NODE_CLASS_MAPPINGS = {
     "MVNT Generate Character": MVNTGenerateCharacter,
     "MVNT Export Video": MVNTExportVideo,
     "MVNT Load Motion": MVNTLoadMotion,
+    "MVNT Preview BVH": MVNTPreviewBVH,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -25,6 +27,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MVNT Generate Character": "MVNT Generate Character",
     "MVNT Export Video": "MVNT Export Video 🎬",
     "MVNT Load Motion": "MVNT Load Motion",
+    "MVNT Preview BVH": "MVNT Preview BVH 👁️",
 }
 
 WEB_DIRECTORY = None

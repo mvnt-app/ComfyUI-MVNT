@@ -1,10 +1,10 @@
 [project]
 name = "comfyui-mvnt"
 description = "Music in, choreography out — generate full-body dance motion from audio using MVNT AI inside ComfyUI"
-version = "1.0.1"
+version = "1.1.0"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-dependencies = ["requests>=2.31.0"]
+dependencies = ["requests>=2.31.0", "numpy>=1.24.0"]
 
 [project.urls]
 Repository = "https://github.com/mvnt-app/ComfyUI-MVNT"

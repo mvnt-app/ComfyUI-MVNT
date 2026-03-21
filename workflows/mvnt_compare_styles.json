@@ -1,0 +1,172 @@
+{
+  "last_node_id": 11,
+  "last_link_id": 10,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadAudio",
+      "pos": [100, 350],
+      "size": [300, 80],
+      "outputs": [
+        {"name": "AUDIO", "type": "AUDIO", "links": [1, 2]}
+      ],
+      "widgets_values": ["input/my_song.wav"]
+    },
+    {
+      "id": 2,
+      "type": "MVNT Generate Dance",
+      "pos": [500, 200],
+      "size": [350, 280],
+      "inputs": [
+        {"name": "audio", "type": "AUDIO", "link": 1}
+      ],
+      "outputs": [
+        {"name": "motion_file_path", "type": "STRING", "links": [3]},
+        {"name": "generation_id", "type": "STRING", "links": []}
+      ],
+      "widgets_values": ["Male", "", "bvh", -1, 2.0, 1.0, 0.0, 0.0],
+      "title": "MVNT Dance — Male Style"
+    },
+    {
+      "id": 3,
+      "type": "MVNT Generate Dance",
+      "pos": [500, 560],
+      "size": [350, 280],
+      "inputs": [
+        {"name": "audio", "type": "AUDIO", "link": 2}
+      ],
+      "outputs": [
+        {"name": "motion_file_path", "type": "STRING", "links": [4]},
+        {"name": "generation_id", "type": "STRING", "links": []}
+      ],
+      "widgets_values": ["Female", "", "bvh", -1, 2.0, 1.0, 0.0, 0.0],
+      "title": "MVNT Dance — Female Style"
+    },
+    {
+      "id": 4,
+      "type": "MVNT Load Motion",
+      "pos": [950, 230],
+      "size": [300, 80],
+      "inputs": [
+        {"name": "file_path", "type": "STRING", "link": 3}
+      ],
+      "outputs": [
+        {"name": "motion_data", "type": "STRING", "links": [5]}
+      ],
+      "title": "Load Male Motion"
+    },
+    {
+      "id": 5,
+      "type": "MVNT Load Motion",
+      "pos": [950, 590],
+      "size": [300, 80],
+      "inputs": [
+        {"name": "file_path", "type": "STRING", "link": 4}
+      ],
+      "outputs": [
+        {"name": "motion_data", "type": "STRING", "links": [6]}
+      ],
+      "title": "Load Female Motion"
+    },
+    {
+      "id": 6,
+      "type": "MVNT Preview BVH",
+      "pos": [1350, 160],
+      "size": [350, 320],
+      "inputs": [
+        {"name": "motion_data", "type": "STRING", "link": 5}
+      ],
+      "outputs": [
+        {"name": "frames", "type": "IMAGE", "links": [7]}
+      ],
+      "widgets_values": [512, 512, 2, 3, "black", "cyan", "white", 150],
+      "title": "Preview — Male"
+    },
+    {
+      "id": 7,
+      "type": "MVNT Preview BVH",
+      "pos": [1350, 540],
+      "size": [350, 320],
+      "inputs": [
+        {"name": "motion_data", "type": "STRING", "link": 6}
+      ],
+      "outputs": [
+        {"name": "frames", "type": "IMAGE", "links": [8]}
+      ],
+      "widgets_values": [512, 512, 2, 3, "black", "magenta", "white", 150],
+      "title": "Preview — Female"
+    },
+    {
+      "id": 8,
+      "type": "PreviewImage",
+      "pos": [1800, 160],
+      "size": [400, 300],
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 7}
+      ],
+      "title": "Male Dance Preview"
+    },
+    {
+      "id": 9,
+      "type": "PreviewImage",
+      "pos": [1800, 540],
+      "size": [400, 300],
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 8}
+      ],
+      "title": "Female Dance Preview"
+    },
+    {
+      "id": 10,
+      "type": "MVNT Estimate Cost",
+      "pos": [100, 150],
+      "size": [300, 100],
+      "outputs": [
+        {"name": "estimate_json", "type": "STRING", "links": [9]}
+      ],
+      "widgets_values": [30.0, "", "bvh"]
+    },
+    {
+      "id": 11,
+      "type": "ShowText",
+      "pos": [100, 550],
+      "size": [300, 80],
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 9}
+      ]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "AUDIO"],
+    [2, 1, 0, 3, 0, "AUDIO"],
+    [3, 2, 0, 4, 0, "STRING"],
+    [4, 3, 0, 5, 0, "STRING"],
+    [5, 4, 0, 6, 0, "STRING"],
+    [6, 5, 0, 7, 0, "STRING"],
+    [7, 6, 0, 8, 0, "IMAGE"],
+    [8, 7, 0, 9, 0, "IMAGE"],
+    [9, 10, 0, 11, 0, "STRING"]
+  ],
+  "groups": [
+    {
+      "title": "Male Style",
+      "bounding": [470, 130, 1780, 340],
+      "color": "#3f789e"
+    },
+    {
+      "title": "Female Style",
+      "bounding": [470, 500, 1780, 340],
+      "color": "#9e3f78"
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {"scale": 0.7, "offset": [0, 0]},
+    "info": {
+      "name": "MVNT — Compare Dance Styles",
+      "description": "Generate two different dance styles (Male vs Female) from the same audio track and preview them side by side. Great for picking the best style before exporting to video.\n\nRequires: ComfyUI-MVNT node pack\nGet your API key at https://mvnt.studio",
+      "author": "MVNT",
+      "version": "1.0.0"
+    }
+  }
+}

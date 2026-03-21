@@ -1,0 +1,87 @@
+{
+  "last_node_id": 5,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadAudio",
+      "pos": [100, 250],
+      "size": [300, 80],
+      "outputs": [
+        {"name": "AUDIO", "type": "AUDIO", "links": [1]}
+      ],
+      "widgets_values": ["input/my_song.wav"]
+    },
+    {
+      "id": 2,
+      "type": "MVNT Generate Dance",
+      "pos": [500, 200],
+      "size": [350, 280],
+      "inputs": [
+        {"name": "audio", "type": "AUDIO", "link": 1}
+      ],
+      "outputs": [
+        {"name": "motion_file_path", "type": "STRING", "links": [2]},
+        {"name": "generation_id", "type": "STRING", "links": []}
+      ],
+      "widgets_values": ["All", "", "bvh", -1, 2.0, 1.0, 0.0, 0.0]
+    },
+    {
+      "id": 3,
+      "type": "MVNT Load Motion",
+      "pos": [950, 200],
+      "size": [300, 80],
+      "inputs": [
+        {"name": "file_path", "type": "STRING", "link": 2}
+      ],
+      "outputs": [
+        {"name": "motion_data", "type": "STRING", "links": [3]}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "MVNT Preview BVH",
+      "pos": [1350, 160],
+      "size": [350, 320],
+      "inputs": [
+        {"name": "motion_data", "type": "STRING", "link": 3}
+      ],
+      "outputs": [
+        {"name": "frames", "type": "IMAGE", "links": [4]}
+      ],
+      "widgets_values": [512, 512, 2, 3, "black", "cyan", "white", 300]
+    },
+    {
+      "id": 5,
+      "type": "PreviewImage",
+      "pos": [1800, 200],
+      "size": [400, 400],
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 4}
+      ]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "AUDIO"],
+    [2, 2, 0, 3, 0, "STRING"],
+    [3, 3, 0, 4, 0, "STRING"],
+    [4, 4, 0, 5, 0, "IMAGE"]
+  ],
+  "groups": [
+    {
+      "title": "MVNT — Audio to Dance with Preview",
+      "bounding": [70, 100, 2200, 560],
+      "color": "#3f789e"
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {"scale": 0.85, "offset": [0, 0]},
+    "info": {
+      "name": "MVNT — Audio to Dance with Stick-Figure Preview",
+      "description": "Generate AI dance choreography from audio and preview the motion as a stick-figure animation. The preview renders as IMAGE frames you can pipe into any video node.\n\nRequires: ComfyUI-MVNT node pack\nGet your API key at https://mvnt.studio",
+      "author": "MVNT",
+      "version": "1.0.0"
+    }
+  }
+}
