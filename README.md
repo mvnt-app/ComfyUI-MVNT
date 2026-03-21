@@ -25,7 +25,7 @@ Search for **MVNT** in the ComfyUI Manager and click Install.
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/nicejoonjung/ComfyUI-MVNT.git
+git clone https://github.com/joonjung-mvnt/ComfyUI-MVNT.git
 cd ComfyUI-MVNT
 pip install -r requirements.txt
 ```
