@@ -11,6 +11,6 @@ Repository = "https://github.com/mvnt-app/ComfyUI-MVNT"
 Documentation = "https://mvnt.world/docs"
 
 [tool.comfy]
-PublisherId = ""  # TODO: fill in after creating publisher at https://registry.comfy.org
+PublisherId = "mvnt"
 DisplayName = "ComfyUI-MVNT"
 Icon = "https://mvnt.world/icon.png"
