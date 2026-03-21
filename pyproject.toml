@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 dependencies = ["requests>=2.31.0"]
 
 [project.urls]
-Repository = "https://github.com/joonjung-mvnt/ComfyUI-MVNT"
+Repository = "https://github.com/mvnt-app/ComfyUI-MVNT"
 Documentation = "https://mvnt.world/docs"
 
 [tool.comfy]
