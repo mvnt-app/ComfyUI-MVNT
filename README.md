@@ -34,7 +34,7 @@ Restart ComfyUI.
 
 ## API Key Setup
 
-1. Get API access at [mvnt.studio](https://mvnt.studio)
+1. Request API access at [hello@mvnt.world](mailto:hello@mvnt.world) or join the [Discord](https://discord.gg/fKFExR3yWy) — early access is available now
 2. Set the environment variable before launching ComfyUI:
 
 ```bash
@@ -42,6 +42,8 @@ export MVNT_API_KEY=mk_live_xxxxxxxxxxxxx
 ```
 
 Or pass the key directly to each node via the `api_key` input.
+
+> API keys use the prefix `mk_live_` for production and `mk_test_` for sandbox testing.
 
 ## Quick Start
 
