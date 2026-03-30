@@ -4,6 +4,22 @@
 
 MVNT's diffusion-based model is trained alongside 100+ professional choreographers with studio-captured motion data. It outputs production-ready .BVH / .FBX / .JSON at 60 fps with music-synced, style-aware choreography and physics-aware refinement.
 
+## Demo
+
+### MVNT + Kling AI — Motion Transfer
+
+https://github.com/user-attachments/assets/mvnt_kling_usecase.mp4
+
+> Audio → AI dance choreography → photorealistic video via Kling motion transfer
+
+https://github.com/mvnt-app/ComfyUI-MVNT/releases/download/v1.1.0/mvnt_kling_usecase.mp4
+
+### MVNT Studio — AI Dance Generation
+
+https://github.com/mvnt-app/ComfyUI-MVNT/releases/download/v1.1.0/mS-demo-comp_480.mov
+
+> K-pop quality dance from any music track in ~15 seconds
+
 ## Nodes
 
 | Node | Description |
@@ -11,9 +27,21 @@ MVNT's diffusion-based model is trained alongside 100+ professional choreographe
 | **MVNT Generate Dance** | Audio → full-body dance motion (BVH / FBX / JSON) |
 | **MVNT Generate Character** | Image or text prompt → rigged 3D GLB character |
 | **MVNT Export Video** | Character image + motion reference → photorealistic AI video |
+| **MVNT Preview BVH** | Render stick-figure animation from BVH → IMAGE frames |
 | **MVNT List Styles** | Fetch available dance styles |
 | **MVNT Estimate Cost** | Estimate credits and generation time before running |
 | **MVNT Load Motion** | Load a downloaded motion file for downstream nodes |
+
+## Example Workflows
+
+Ready-to-use workflows are in the [`workflows/`](./workflows) folder. Drag any `.json` file into ComfyUI to load it.
+
+| Workflow | Description |
+|----------|-------------|
+| [Audio to Dance](./workflows/mvnt_audio_to_dance.json) | Basic: load audio → generate dance → view BVH data |
+| [Dance with Preview](./workflows/mvnt_dance_with_preview.json) | Generate dance + render stick-figure preview as IMAGE frames |
+| [Full Music Video](./workflows/mvnt_full_music_video.json) | End-to-end: audio → dance → 3D character → AI video export |
+| [Compare Styles](./workflows/mvnt_compare_styles.json) | Side-by-side Male vs Female dance from the same audio |
 
 ## Installation
 
@@ -21,7 +49,13 @@ MVNT's diffusion-based model is trained alongside 100+ professional choreographe
 
 Search for **MVNT** in the ComfyUI Manager and click Install.
 
-### Option B: Manual
+### Option B: Comfy Registry
+
+```bash
+comfy node registry-install comfyui-mvnt
+```
+
+### Option C: Manual
 
 ```bash
 cd ComfyUI/custom_nodes
@@ -47,11 +81,21 @@ Or pass the key directly to each node via the `api_key` input.
 
 ## Quick Start
 
-1. Add **Load Audio** → **MVNT Generate Dance** → **MVNT Load Motion**
-2. Pick a style
-3. Queue the workflow — the node submits audio to the MVNT API, polls for completion, and saves the motion file to `output/`
+### Simple: Audio → Dance
 
-See the [`workflows/`](./workflows) folder for ready-to-use example workflows.
+1. Add **Load Audio** → **MVNT Generate Dance** → **MVNT Load Motion**
+2. Pick a style (All / Male / Female)
+3. Queue — the node submits audio to the MVNT API, polls for completion, and saves the motion file to `output/`
+
+### With Preview
+
+Chain **MVNT Load Motion** → **MVNT Preview BVH** → **PreviewImage** to see a stick-figure animation of the choreography directly in ComfyUI.
+
+### Full Music Video Pipeline
+
+1. **Load Audio** → **MVNT Generate Dance** (produces BVH motion)
+2. **Load Image** → **MVNT Generate Character** (creates rigged 3D character from any photo)
+3. **MVNT Export Video** (combines character + motion into a photorealistic AI video)
 
 ## API
 

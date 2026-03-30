@@ -1,8 +1,12 @@
 """ComfyUI custom nodes for the MVNT Motion API."""
 
 import os
+import re
+import math
 import tempfile
 import folder_paths
+import numpy as np
+import torch
 
 from . import mvnt_client
 
@@ -285,6 +289,226 @@ class MVNTLoadMotion:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             data = f.read()
         return (data,)
+
+
+# ---------------------------------------------------------------------------
+# BVH Preview (stick-figure render → IMAGE tensor)
+# ---------------------------------------------------------------------------
+
+class MVNTPreviewBVH:
+    """
+    Render stick-figure frames from BVH motion data as IMAGE tensors.
+    Pipe output into PreviewImage, SaveImage, or video nodes.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "motion_data": ("STRING",),
+            },
+            "optional": {
+                "width": ("INT", {"default": 512, "min": 128, "max": 2048, "step": 64}),
+                "height": ("INT", {"default": 512, "min": 128, "max": 2048, "step": 64}),
+                "fps_divisor": ("INT", {"default": 2, "min": 1, "max": 30}),
+                "line_width": ("INT", {"default": 3, "min": 1, "max": 10}),
+                "bg_color": (["black", "white"], {"default": "black"}),
+                "skeleton_color": (["cyan", "white", "green", "magenta", "yellow"], {"default": "cyan"}),
+                "joint_color": (["white", "red", "yellow", "orange"], {"default": "white"}),
+                "max_frames": ("INT", {"default": 300, "min": 1, "max": 9999}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("frames",)
+    FUNCTION = "render"
+    CATEGORY = "MVNT"
+    DESCRIPTION = (
+        "Render a stick-figure animation preview from BVH motion data. "
+        "Outputs IMAGE frames for PreviewImage, video compositing, or thumbnails."
+    )
+
+    _PALETTE = {
+        "black": (0.0, 0.0, 0.0), "white": (1.0, 1.0, 1.0),
+        "cyan": (0.0, 0.9, 1.0), "green": (0.2, 1.0, 0.4),
+        "magenta": (1.0, 0.2, 0.8), "yellow": (1.0, 0.95, 0.2),
+        "red": (1.0, 0.2, 0.2), "orange": (1.0, 0.6, 0.1),
+    }
+
+    def render(
+        self, motion_data, width=512, height=512, fps_divisor=2,
+        line_width=3, bg_color="black", skeleton_color="cyan",
+        joint_color="white", max_frames=300,
+    ):
+        joints, hierarchy, frames_raw = _parse_bvh(motion_data)
+        parent_map = _build_parent_map(joints, hierarchy)
+
+        indices = list(range(0, len(frames_raw), fps_divisor))[:max_frames] or [0]
+
+        bg = np.array(self._PALETTE.get(bg_color, (0, 0, 0)), dtype=np.float32)
+        sk = np.array(self._PALETTE.get(skeleton_color, (0, 0.9, 1)), dtype=np.float32)
+        jc = np.array(self._PALETTE.get(joint_color, (1, 1, 1)), dtype=np.float32)
+
+        all_pos = [_forward_kinematics(joints, hierarchy, frames_raw[i]) for i in indices]
+        flat = np.concatenate(all_pos, axis=0)
+        center = flat.mean(axis=0)
+        span = max(flat.max(axis=0) - flat.min(axis=0)) * 0.6
+        if span < 1e-6:
+            span = 100.0
+
+        images = []
+        for pos in all_pos:
+            img = np.tile(bg, (height, width, 1))
+            proj = _project(pos, center, span, width, height)
+            for i, pi in enumerate(parent_map):
+                if pi >= 0:
+                    _draw_line(img, proj[pi], proj[i], sk, line_width)
+            r = max(line_width, 2)
+            for pt in proj:
+                _draw_circle(img, pt, r, jc)
+            images.append(img)
+
+        return (torch.from_numpy(np.stack(images, axis=0)),)
+
+
+# ---------------------------------------------------------------------------
+# BVH parsing helpers
+# ---------------------------------------------------------------------------
+
+def _parse_bvh(text):
+    lines = text.strip().split("\n")
+    joints, hierarchy, stack, channels_order = [], {}, [], []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith("ROOT") or line.startswith("JOINT"):
+            name = line.split()[-1]
+            joints.append(name)
+            hierarchy[name] = {
+                "parent": stack[-1] if stack else None,
+                "offset": (0.0, 0.0, 0.0), "channels": [],
+            }
+            stack.append(name)
+        elif line.startswith("End Site"):
+            tag = f"__end_{len(joints)}"
+            stack.append(tag)
+            i += 1
+            while i < len(lines) and "}" not in lines[i]:
+                i += 1
+            stack.pop()
+            i += 1
+            continue
+        elif line.startswith("OFFSET"):
+            vals = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", line)]
+            if stack and stack[-1] in hierarchy:
+                hierarchy[stack[-1]]["offset"] = tuple(vals[:3]) if len(vals) >= 3 else (0, 0, 0)
+        elif line.startswith("CHANNELS"):
+            parts = line.split()
+            n = int(parts[1])
+            ch = parts[2:2 + n]
+            if stack and stack[-1] in hierarchy:
+                hierarchy[stack[-1]]["channels"] = ch
+                channels_order.append((stack[-1], ch))
+        elif line == "}":
+            if stack:
+                stack.pop()
+        elif line.startswith("Frame Time:"):
+            i += 1
+            break
+        i += 1
+    frames = []
+    while i < len(lines):
+        line = lines[i].strip()
+        if line:
+            vals = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", line)]
+            if vals:
+                frames.append(vals)
+        i += 1
+    return joints, hierarchy, frames
+
+
+def _build_parent_map(joints, hierarchy):
+    idx = {n: i for i, n in enumerate(joints)}
+    return [idx.get(hierarchy[n]["parent"], -1) for n in joints]
+
+
+def _rot_matrix(deg, axis):
+    a = math.radians(deg)
+    c, s = math.cos(a), math.sin(a)
+    if axis in "Xx":
+        return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+    if axis in "Yy":
+        return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+def _forward_kinematics(joints, hierarchy, frame_vals):
+    n = len(joints)
+    positions = np.zeros((n, 3))
+    rotations = [np.eye(3)] * n
+    idx_map = {name: i for i, name in enumerate(joints)}
+    vi = 0
+    for jname in joints:
+        info = hierarchy[jname]
+        ch = info["channels"]
+        vals = frame_vals[vi:vi + len(ch)]
+        vi += len(ch)
+        offset = np.array(info["offset"])
+        lr = np.eye(3)
+        trans = np.zeros(3)
+        for c, v in zip(ch, vals):
+            cl = c.lower()
+            if cl == "xposition": trans[0] = v
+            elif cl == "yposition": trans[1] = v
+            elif cl == "zposition": trans[2] = v
+            elif cl == "xrotation": lr = lr @ _rot_matrix(v, "X")
+            elif cl == "yrotation": lr = lr @ _rot_matrix(v, "Y")
+            elif cl == "zrotation": lr = lr @ _rot_matrix(v, "Z")
+        ji = idx_map[jname]
+        p = info["parent"]
+        if p and p in idx_map:
+            pi = idx_map[p]
+            positions[ji] = positions[pi] + rotations[pi] @ (offset + trans)
+            rotations[ji] = rotations[pi] @ lr
+        else:
+            positions[ji] = offset + trans
+            rotations[ji] = lr
+    return positions
+
+
+def _project(positions, center, span, w, h):
+    proj = np.zeros((len(positions), 2), dtype=np.int32)
+    for i, p in enumerate(positions):
+        nx = (p[0] - center[0]) / span
+        ny = -(p[1] - center[1]) / span
+        proj[i] = [int(w * 0.5 + nx * w * 0.4), int(h * 0.5 + ny * h * 0.4)]
+    return proj
+
+
+def _draw_line(img, p0, p1, color, width):
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = int(p0[0]), int(p0[1]), int(p1[0]), int(p1[1])
+    steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+    hw = width // 2
+    for s in range(steps + 1):
+        t = s / steps
+        x, y = int(x0 + t * (x1 - x0)), int(y0 + t * (y1 - y0))
+        for ox in range(-hw, hw + 1):
+            for oy in range(-hw, hw + 1):
+                px, py = x + ox, y + oy
+                if 0 <= px < w and 0 <= py < h:
+                    img[py, px] = color
+
+
+def _draw_circle(img, c, r, color):
+    h, w = img.shape[:2]
+    cx, cy = int(c[0]), int(c[1])
+    for ox in range(-r, r + 1):
+        for oy in range(-r, r + 1):
+            if ox * ox + oy * oy <= r * r:
+                px, py = cx + ox, cy + oy
+                if 0 <= px < w and 0 <= py < h:
+                    img[py, px] = color
 
 
 # ---------------------------------------------------------------------------
