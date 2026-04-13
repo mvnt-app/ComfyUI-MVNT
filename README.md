@@ -1,6 +1,6 @@
 # ComfyUI-MVNT
 
-**Music in, choreography out.** Generate full-body dance sequences from audio using [MVNT AI](https://mvnt.io) — the world's first AI system purpose-built for dance — directly inside ComfyUI.
+**Music in, choreography out.** Generate full-body dance sequences from audio using [MVNT AI](https://mvnt.studio) — the world's first AI system purpose-built for dance — directly inside ComfyUI.
 
 MVNT's diffusion-based model is trained alongside 100+ professional choreographers with studio-captured motion data. It outputs production-ready .BVH / .FBX / .JSON at 60 fps with music-synced, style-aware choreography and physics-aware refinement.
 
