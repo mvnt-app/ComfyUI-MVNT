@@ -1,34 +1,25 @@
 """ComfyUI-MVNT: AI dance choreography from music."""
 
 from .nodes import (
+    MVNTAudioSegment,
+    MVNTImageToTPose,
     MVNTGenerateDance,
-    MVNTListStyles,
-    MVNTEstimateCost,
-    MVNTGenerateCharacter,
-    MVNTExportVideo,
-    MVNTLoadMotion,
-    MVNTPreviewBVH,
+    MVNTPreviewDance3D,
 )
 
 NODE_CLASS_MAPPINGS = {
+    "MVNT Audio Segment": MVNTAudioSegment,
+    "MVNT Image to T-Pose": MVNTImageToTPose,
     "MVNT Generate Dance": MVNTGenerateDance,
-    "MVNT List Styles": MVNTListStyles,
-    "MVNT Estimate Cost": MVNTEstimateCost,
-    "MVNT Generate Character": MVNTGenerateCharacter,
-    "MVNT Export Video": MVNTExportVideo,
-    "MVNT Load Motion": MVNTLoadMotion,
-    "MVNT Preview BVH": MVNTPreviewBVH,
+    "MVNTPreviewDance3D": MVNTPreviewDance3D,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "MVNT Audio Segment": "MVNT Audio Segment",
+    "MVNT Image to T-Pose": "MVNT Image to T-Pose",
     "MVNT Generate Dance": "MVNT Generate Dance 💃",
-    "MVNT List Styles": "MVNT List Styles",
-    "MVNT Estimate Cost": "MVNT Estimate Cost",
-    "MVNT Generate Character": "MVNT Generate Character",
-    "MVNT Export Video": "MVNT Export Video 🎬",
-    "MVNT Load Motion": "MVNT Load Motion",
-    "MVNT Preview BVH": "MVNT Preview BVH 👁️",
+    "MVNTPreviewDance3D": "MVNT Preview Dance 3D",
 }
 
-WEB_DIRECTORY = None
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+WEB_DIRECTORY = "./js"
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

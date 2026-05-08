@@ -3,12 +3,188 @@
 import os
 import re
 import math
+import json
 import tempfile
+import uuid
 import folder_paths
 import numpy as np
 import torch
 
 from . import mvnt_client
+
+try:
+    from comfy_api.latest import IO, UI, Types
+except Exception:
+    IO = None
+    UI = None
+    Types = None
+
+MVNTPreviewBase = IO.ComfyNode if IO is not None else object
+
+MAX_AUDIO_SECONDS = 40.0
+
+MVNT_STYLE_CHOICES = [
+    "#K-Pop / All",
+    "#K-Pop / Boy",
+    "#K-Pop / Girl",
+    "#Challenge",
+    "#Poppin",
+    "#Hip-hop",
+    "#Krump",
+    "#Jazz",
+]
+
+MVNT_STYLE_TOKEN_MAP = {
+    "#K-Pop / All": "All",
+    "#K-Pop / Boy": "Male",
+    "#K-Pop / Girl": "Female",
+    "#Challenge": "gCHL",
+    "#Poppin": "gPO",
+    "#Hip-hop": "gLH",
+    "#Krump": "gKR",
+    "#Jazz": "gJZ",
+    # Backwards compatibility for older saved workflows.
+    "All": "All",
+    "Male": "Male",
+    "Female": "Female",
+    "gKP": "All",
+    "gCHL": "gCHL",
+    "gPO": "gPO",
+    "gLH": "gLH",
+    "gKR": "gKR",
+    "gJZ": "gJZ",
+}
+
+
+def _mvnt_style_token(style: str) -> str:
+    return MVNT_STYLE_TOKEN_MAP.get(str(style or "").strip(), "All")
+
+
+# ---------------------------------------------------------------------------
+# Audio Segment
+# ---------------------------------------------------------------------------
+
+class MVNTAudioSegment:
+    """Trim audio to a MVNT-ready segment with a 40 second maximum."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio": ("AUDIO",),
+                "start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1}),
+                "duration_sec": ("FLOAT", {"default": 20.0, "min": 0.1, "max": MAX_AUDIO_SECONDS, "step": 0.1}),
+            },
+        }
+
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("audio", "segment_info")
+    FUNCTION = "trim"
+    CATEGORY = "MVNT"
+    DESCRIPTION = "Choose the audio segment MVNT should use. Duration is clamped to 40 seconds."
+
+    def trim(self, audio, start_sec=0.0, duration_sec=20.0):
+        import torch
+
+        waveform = audio["waveform"]
+        sample_rate = int(audio["sample_rate"])
+        total_samples = _audio_sample_count(waveform)
+        total_sec = total_samples / float(sample_rate) if sample_rate > 0 else 0.0
+
+        start = max(0.0, min(float(start_sec), total_sec))
+        duration = max(0.1, min(float(duration_sec), MAX_AUDIO_SECONDS))
+        end = min(start + duration, total_sec)
+        if end <= start:
+            start = max(0.0, total_sec - min(MAX_AUDIO_SECONDS, total_sec))
+            end = total_sec
+
+        start_sample = int(round(start * sample_rate))
+        end_sample = max(start_sample + 1, int(round(end * sample_rate)))
+
+        if isinstance(waveform, torch.Tensor):
+            trimmed = waveform[..., start_sample:end_sample].clone()
+        else:
+            trimmed = waveform[..., start_sample:end_sample]
+
+        info = {
+            "total_sec": round(total_sec, 3),
+            "start_sec": round(start, 3),
+            "end_sec": round(end, 3),
+            "duration_sec": round(end - start, 3),
+            "max_duration_sec": MAX_AUDIO_SECONDS,
+        }
+        return ({"waveform": trimmed, "sample_rate": sample_rate}, json.dumps(info, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------------------
+# Image to T-Pose
+# ---------------------------------------------------------------------------
+
+class MVNTImageToTPose:
+    """Convert a character image into a T-pose image using Tripo's image regeneration."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_image": ("IMAGE",),
+            },
+            "optional": {
+                "prompt": (
+                    "STRING",
+                    {
+                        "default": "full body, front view",
+                        "multiline": True,
+                    },
+                ),
+                "tripo_api_key": ("STRING", {"default": "", "multiline": False}),
+                "tripo_api_base": ("STRING", {"default": "", "multiline": False}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("tpose_image", "tpose_image_file", "tpose_job_id")
+    FUNCTION = "generate"
+    CATEGORY = "MVNT"
+    DESCRIPTION = "Source character image -> T-pose character image. The T-pose regeneration is handled internally."
+
+    def generate(
+        self,
+        source_image,
+        prompt="",
+        tripo_api_key="",
+        tripo_api_base="",
+    ):
+        source_path = _save_image_to_temp(source_image)
+        try:
+            task_id = mvnt_client.create_tripo_tpose_image(
+                source_path,
+                api_key=tripo_api_key or None,
+                api_base=tripo_api_base or None,
+                prompt=prompt,
+            )
+            completed = mvnt_client.poll_tripo_task(
+                task_id,
+                api_key=tripo_api_key or None,
+                api_base=tripo_api_base or None,
+            )
+            output_url = _first_tpose_output_url(completed)
+
+            if not output_url:
+                raise RuntimeError(f"Tripo T-pose image task did not include an output image URL: {completed}")
+
+            out_dir = folder_paths.get_output_directory()
+            file_id = task_id or "result"
+            tpose_image_file = os.path.join(out_dir, f"mvnt_tpose_{file_id}.png")
+            mvnt_client.download_file_url(
+                output_url,
+                tpose_image_file,
+            )
+
+            return (_load_image_file(tpose_image_file), tpose_image_file, task_id)
+        finally:
+            if source_path and os.path.exists(source_path):
+                os.remove(source_path)
 
 
 # ---------------------------------------------------------------------------
@@ -16,70 +192,190 @@ from . import mvnt_client
 # ---------------------------------------------------------------------------
 
 class MVNTGenerateDance:
-    """Submit audio and generate AI dance choreography via MVNT."""
+    """Generate MVNT dance output from music, with optional Tripo-style character input."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "audio": ("AUDIO",),
-                "style": (["All", "Male", "Female"], {"default": "All"}),
+                "style": (MVNT_STYLE_CHOICES, {"default": "#K-Pop / All"}),
             },
             "optional": {
+                "character_glb": ("*",),
+                "video_profile": (["pretty", "kling"], {"default": "pretty"}),
                 "api_key": ("STRING", {"default": "", "multiline": False}),
-                "output_format": (["bvh", "fbx", "json"], {"default": "bvh"}),
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
-                "guidance": ("FLOAT", {"default": 2.0, "min": 0.5, "max": 5.0, "step": 0.1}),
-                "temperature": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 2.0, "step": 0.1}),
-                "trim_start": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 180.0, "step": 0.1}),
-                "trim_end": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 180.0, "step": 0.1}),
             },
         }
 
     RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("motion_file_path", "generation_id")
+    RETURN_NAMES = (
+        "dance_3d",
+        "dance_video",
+    )
     FUNCTION = "generate"
     CATEGORY = "MVNT"
-    DESCRIPTION = "Generate AI dance choreography from an audio file using MVNT's motion diffusion model."
+    DESCRIPTION = (
+        "Generate dance from audio. If a compatible Tripo GLB is connected, MVNT will try to retarget the dance to that character."
+    )
 
     def generate(
         self,
         audio,
         style="All",
+        character_glb=None,
+        video_profile="pretty",
         api_key="",
-        output_format="bvh",
-        seed=-1,
-        guidance=2.0,
-        temperature=1.0,
-        trim_start=0.0,
-        trim_end=0.0,
     ):
         audio_path = _save_audio_to_temp(audio)
+        print(f"[MVNT Generate Dance] raw character_glb={character_glb!r}")
+        character_path = _coerce_optional_file_path(character_glb)
+        print(f"[MVNT Generate Dance] resolved character_path={character_path!r}")
+        if character_glb and not character_path:
+            raise RuntimeError(f"character_glb was connected, but MVNT could not resolve it to a local file path: {character_glb!r}")
+        if character_path:
+            print(f"[MVNT Generate Dance] character_glb resolved: {character_path}")
 
         try:
             result = mvnt_client.create_generation(
                 audio_path,
                 api_key=api_key or None,
-                style=style,
-                output_format=output_format,
-                seed=seed,
-                guidance=guidance,
-                temperature=temperature,
-                trim_start=trim_start,
-                trim_end=trim_end,
+                api_base=None,
+                character_path=None,
+                style=_mvnt_style_token(style),
+                output_format="glb",
+                output_mode="both",
+                preview_style="mannequin",
+                seed=-1,
+                guidance=2.0,
+                temperature=1.2,
+                mode="standard",
+                save_hard_yaw_lock_variant=True,
+                trim_start=0.0,
+                trim_end=0.0,
             )
-            gen_id = result["id"]
+            gen_id = mvnt_client.generation_id_from_response(result)
 
-            mvnt_client.poll_generation(gen_id, api_key=api_key or None)
+            mvnt_client.poll_generation(
+                gen_id,
+                api_key=api_key or None,
+                api_base=None,
+            )
 
             out_dir = folder_paths.get_output_directory()
-            dest = os.path.join(out_dir, f"mvnt_{gen_id}.{output_format}")
-            mvnt_client.download_generation_output(gen_id, dest, api_key=api_key or None)
+            motion_glb_path = os.path.join(out_dir, f"mvnt_{gen_id}.motion.glb")
 
-            return (dest, gen_id)
+            motion_glb = _download_glb_output(
+                gen_id,
+                motion_glb_path,
+                api_key=api_key or None,
+                api_base=None,
+            )
+
+            if not motion_glb:
+                raise RuntimeError(
+                    "MVNT did not return a GLB output for this generation. "
+                    "The Comfy 3D preview expects GLB, so FBX/BVH fallback is not returned as dance_3d."
+                )
+
+            dance_3d = motion_glb
+            if character_path:
+                retargeted_glb_path = os.path.join(out_dir, f"mvnt_{gen_id}.tripo_retargeted.glb")
+                print(
+                    f"[MVNT Generate Dance] retargeting motion_glb={motion_glb} "
+                    f"character_glb={character_path} -> {retargeted_glb_path}"
+                )
+                dance_3d = mvnt_client.retarget_tripo_glb(
+                    motion_glb,
+                    character_path,
+                    retargeted_glb_path,
+                    api_key=api_key or None,
+                    api_base=None,
+                )
+
+            dance_video_path = os.path.join(out_dir, f"mvnt_{gen_id}.dance.mp4")
+            dance_video = _download_video_output(
+                gen_id,
+                dance_video_path,
+                api_key=api_key or None,
+                api_base=None,
+                video_profile=video_profile,
+            )
+
+            if not dance_video:
+                raise RuntimeError(
+                    "MVNT did not return an MP4 dance_video output. "
+                    "The backend must expose /render-mp4-lda or a v1 render output for Comfy video export."
+                )
+
+            return (
+                dance_3d,
+                dance_video,
+            )
         finally:
             if os.path.exists(audio_path):
                 os.remove(audio_path)
+
+
+# ---------------------------------------------------------------------------
+# Preview Dance 3D + Audio
+# ---------------------------------------------------------------------------
+
+class MVNTPreviewDance3D(MVNTPreviewBase):
+    """Preview an animated GLB with the source audio using Comfy's built-in preview UIs."""
+
+    @classmethod
+    def define_schema(cls):
+        if IO is None:
+            raise RuntimeError("Comfy IO API is unavailable in this ComfyUI build.")
+        return IO.Schema(
+            node_id="MVNTPreviewDance3D",
+            display_name="MVNT Preview Dance 3D",
+            category="MVNT",
+            is_output_node=True,
+            inputs=[
+                IO.MultiType.Input(
+                    IO.String.Input("model_file", default="", multiline=False),
+                    types=[
+                        IO.File3DGLB,
+                        IO.File3DGLTF,
+                        IO.File3DFBX,
+                        IO.File3DAny,
+                    ],
+                    tooltip="Animated GLB/model path from MVNT Generate Dance",
+                ),
+                IO.Audio.Input("audio"),
+                IO.Load3DCamera.Input("camera_info", optional=True, advanced=True),
+                IO.Image.Input("bg_image", optional=True, advanced=True),
+            ],
+            outputs=[],
+            description="Show MVNT animated GLB and audio together using Comfy's existing 3D and audio preview UI.",
+        )
+
+    @classmethod
+    def execute(cls, model_file: str, audio=None, **kwargs):
+        if UI is None or Types is None:
+            raise RuntimeError("Comfy PreviewUI3D/PreviewAudio API is unavailable in this ComfyUI build.")
+        if isinstance(model_file, Types.File3D):
+            filename = f"mvnt_preview3d_{uuid.uuid4().hex}.{model_file.format or 'glb'}"
+            model_path = model_file.save_to(os.path.join(folder_paths.get_output_directory(), filename))
+        else:
+            model_path = _coerce_optional_file_path(model_file)
+        if not model_path:
+            raise FileNotFoundError(f"model_file GLB path was not found: {model_file!r}")
+
+        camera_info = kwargs.get("camera_info", None)
+        bg_image = kwargs.get("bg_image", None)
+        audio_ui = UI.PreviewAudio(audio, cls=cls).as_dict().get("audio", []) if audio is not None else []
+        ui = {}
+        ui.update(UI.PreviewUI3D(model_path, camera_info, bg_image=bg_image).as_dict())
+        ui["mvnt_preview"] = [{
+            "model_file": model_path,
+            "audio": audio_ui,
+        }]
+        return IO.NodeOutput(ui=ui)
+
+    process = execute
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +421,10 @@ class MVNTEstimateCost:
             },
             "optional": {
                 "api_key": ("STRING", {"default": "", "multiline": False}),
-                "output_format": (["bvh", "fbx", "json"], {"default": "bvh"}),
+                "api_base": ("STRING", {"default": "", "multiline": False}),
+                "output_format": (["bvh", "fbx"], {"default": "bvh"}),
+                "output_mode": (["both", "3d", "video", "motion_only"], {"default": "both"}),
+                "has_character": ("BOOLEAN", {"default": False}),
             },
         }
 
@@ -135,12 +434,16 @@ class MVNTEstimateCost:
     CATEGORY = "MVNT"
     DESCRIPTION = "Estimate the cost and generation time for a given audio duration."
 
-    def estimate(self, audio_duration, api_key="", output_format="bvh"):
-        import json
+    def estimate(self, audio_duration, api_key="", api_base="", output_format="bvh", output_mode="both", has_character=False):
         result = mvnt_client.estimate_cost(
-            audio_duration, api_key=api_key or None, output_format=output_format
+            audio_duration,
+            api_key=api_key or None,
+            api_base=api_base or None,
+            output_format=output_format,
+            output_mode=output_mode,
+            has_character=has_character,
         )
-        return (json.dumps(result, indent=2),)
+        return (json.dumps(result, indent=2, ensure_ascii=False),)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +451,7 @@ class MVNTEstimateCost:
 # ---------------------------------------------------------------------------
 
 class MVNTGenerateCharacter:
-    """Generate a rigged 3D character (GLB) from an image or text prompt."""
+    """Generate a T-pose rigged 3D character (GLB) from an image or text prompt."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -165,11 +468,11 @@ class MVNTGenerateCharacter:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("character_file_url", "character_id")
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("character_glb", "character_file_url", "character_id")
     FUNCTION = "generate"
     CATEGORY = "MVNT"
-    DESCRIPTION = "Generate a rigged 3D character (GLB) from an image or text prompt using MVNT + Tripo AI."
+    DESCRIPTION = "Generate a T-pose rigged character GLB from an image or prompt. The local GLB output can feed MVNT Generate Dance."
 
     def generate(
         self,
@@ -201,8 +504,17 @@ class MVNTGenerateCharacter:
             char_id = result["id"]
 
             completed = mvnt_client.poll_character(char_id, api_key=api_key or None)
-            output_url = completed.get("output_url", "")
-            return (output_url, char_id)
+            output_url = _first_character_output_url(completed)
+            character_glb = ""
+            if output_url:
+                out_dir = folder_paths.get_output_directory()
+                character_glb = os.path.join(out_dir, f"mvnt_character_{char_id}.glb")
+                mvnt_client.download_file_url(
+                    output_url,
+                    character_glb,
+                    api_key=api_key or None,
+                )
+            return (character_glb, output_url, char_id)
         finally:
             if image_path and os.path.exists(image_path):
                 os.remove(image_path)
@@ -516,24 +828,36 @@ def _draw_circle(img, c, r, color):
 # ---------------------------------------------------------------------------
 
 def _save_audio_to_temp(audio) -> str:
-    """Persist a ComfyUI AUDIO tensor dict to a temporary WAV file."""
+    """Persist a ComfyUI AUDIO tensor dict to a temporary WAV file.
+
+    MVNT generation is capped to the first 40 seconds. Use ComfyUI's
+    TrimAudioDuration node before MVNT Generate Dance to choose a later segment.
+    """
     import soundfile as sf
     import torch
 
     waveform = audio["waveform"]
     sample_rate = audio["sample_rate"]
+    max_samples = int(float(sample_rate) * MAX_AUDIO_SECONDS)
 
     if isinstance(waveform, torch.Tensor):
+        waveform = waveform[..., :max_samples]
         if waveform.dim() == 3:
             waveform = waveform.squeeze(0)
         arr = waveform.cpu().numpy().T
     else:
-        arr = waveform
+        arr = waveform[:max_samples]
 
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     sf.write(tmp.name, arr, sample_rate)
     tmp.close()
     return tmp.name
+
+
+def _audio_sample_count(waveform) -> int:
+    if isinstance(waveform, torch.Tensor):
+        return int(waveform.shape[-1])
+    return int(np.asarray(waveform).shape[-1])
 
 
 def _save_image_to_temp(image) -> str:
@@ -552,3 +876,202 @@ def _save_image_to_temp(image) -> str:
     pil_img.save(tmp.name)
     tmp.close()
     return tmp.name
+
+
+def _load_image_file(path: str):
+    """Load an image file as a ComfyUI IMAGE tensor."""
+    from PIL import Image as PILImage
+
+    img = PILImage.open(path).convert("RGB")
+    arr = np.asarray(img).astype(np.float32) / 255.0
+    return torch.from_numpy(arr)[None, ...]
+
+
+def _coerce_optional_file_path(value) -> str:
+    """Best-effort extraction of a file path from Comfy node outputs."""
+    if not value:
+        return ""
+    if hasattr(value, "save_to") and hasattr(value, "format"):
+        ext = (getattr(value, "format", "") or "glb").lstrip(".") or "glb"
+        out_path = os.path.join(
+            folder_paths.get_output_directory(),
+            f"mvnt_character_input_{uuid.uuid4().hex}.{ext}",
+        )
+        return value.save_to(out_path)
+    if isinstance(value, str):
+        return _resolve_existing_file_path(value)
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            path = _coerce_optional_file_path(item)
+            if path:
+                return path
+        return ""
+    if isinstance(value, dict):
+        if value.get("filename"):
+            filename = value.get("filename")
+            subfolder = value.get("subfolder") or ""
+            for root in _known_comfy_roots():
+                path = os.path.join(root, subfolder, filename)
+                if os.path.exists(path):
+                    return path
+        for key in ("path", "file", "filename", "model_file", "glb", "GLB"):
+            path = _coerce_optional_file_path(value.get(key))
+            if path:
+                return path
+    return ""
+
+
+def _known_comfy_roots():
+    roots = []
+    for getter in (
+        folder_paths.get_output_directory,
+        folder_paths.get_input_directory,
+        folder_paths.get_temp_directory,
+    ):
+        try:
+            root = getter()
+        except Exception:
+            continue
+        if root and root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _resolve_existing_file_path(value: str) -> str:
+    if not value:
+        return ""
+    candidates = [value]
+    if not os.path.isabs(value):
+        for root in _known_comfy_roots():
+            candidates.append(os.path.join(root, value))
+            candidates.append(os.path.join(root, os.path.basename(value)))
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return ""
+
+
+def _first_tpose_output_url(data) -> str:
+    """Accept common output URL shapes from the T-pose image API."""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("output_url", "image_url", "tpose_image_url", "file_url", "url"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    outputs = data.get("outputs") or data.get("output")
+    if isinstance(outputs, str) and outputs:
+        return outputs
+    if isinstance(outputs, dict):
+        for key in ("generated_image", "image", "tpose_image", "png", "file", "url"):
+            value = outputs.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(outputs, list):
+        for item in outputs:
+            if isinstance(item, str) and item:
+                return item
+            if isinstance(item, dict):
+                value = _first_tpose_output_url(item)
+                if value:
+                    return value
+    return ""
+
+
+def _first_character_output_url(data) -> str:
+    """Accept a few backend response shapes while the character API stabilizes."""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("output_url", "character_url", "glb_url", "file_url", "url"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    outputs = data.get("outputs")
+    if isinstance(outputs, dict):
+        for key in ("glb", "character", "model", "file", "url"):
+            value = outputs.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(outputs, list):
+        for item in outputs:
+            if isinstance(item, str) and item:
+                return item
+            if isinstance(item, dict):
+                value = _first_character_output_url(item)
+                if value:
+                    return value
+    return ""
+
+
+def _download_glb_output(gen_id, dest, *, api_key, api_base):
+    """Download the previewable motion GLB, trying the API shapes used across MVNT deployments."""
+    attempts = (
+        {"kind": "3d", "format": "glb", "variant": "hard_yaw_lock"},
+        {"kind": "motion", "format": "glb", "variant": "hard_yaw_lock"},
+        {"kind": "animated", "format": "glb", "variant": "hard_yaw_lock"},
+        {"format": "glb", "variant": "hard_yaw_lock"},
+        {"kind": "3d", "format": "glb"},
+        {"kind": "motion", "format": "glb"},
+        {"kind": "animated", "format": "glb"},
+        {"format": "glb"},
+    )
+    for params in attempts:
+        result = mvnt_client.download_generation_output(
+            gen_id,
+            dest,
+            api_key=api_key,
+            api_base=api_base,
+            allow_missing=True,
+            **params,
+        )
+        if result:
+            return result
+    return ""
+
+
+def _download_video_output(gen_id, dest, *, api_key, api_base, video_profile="pretty"):
+    """Download the server-rendered MP4 video for the dance output slot."""
+    profile = video_profile if video_profile in {"pretty", "kling"} else "pretty"
+    attempts = (
+        {"kind": "render", "format": "mp4", "render_profile": profile},
+        {"kind": "video", "format": "mp4", "render_profile": profile},
+        {"kind": "preview", "format": "mp4", "render_profile": profile},
+        {"format": "mp4", "render_profile": profile},
+    )
+    for params in attempts:
+        result = mvnt_client.download_generation_output(
+            gen_id,
+            dest,
+            api_key=api_key,
+            api_base=api_base,
+            allow_missing=True,
+            **params,
+        )
+        if result:
+            return result
+    return ""
+
+
+def _download_motion_output(gen_id, dest, *, api_key, api_base, output_format):
+    """Try the new output contract first, then fall back to the legacy default route."""
+    result = mvnt_client.download_generation_output(
+        gen_id,
+        dest,
+        api_key=api_key,
+        api_base=api_base,
+        kind="motion",
+        format=output_format,
+        allow_missing=True,
+    )
+    if result:
+        return result
+    if output_format.lower() != "bvh":
+        return ""
+    return mvnt_client.download_generation_output(
+        gen_id,
+        dest,
+        api_key=api_key,
+        api_base=api_base,
+    )

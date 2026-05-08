@@ -1,1 +1,11 @@
 __pycache__/
+*.pyc
+
+# Local debug/server patch scratch files
+tmp/
+tmp_*.py
+backups/
+
+# Local GLB/video render audit outputs
+kling_*.png
+kling_*.mp4
