@@ -863,12 +863,12 @@ def _audio_sample_count(waveform) -> int:
 def _save_image_to_temp(image) -> str:
     """Persist a ComfyUI IMAGE tensor to a temporary PNG file."""
     from PIL import Image as PILImage
-    from torchvision import transforms
     import torch
 
     if isinstance(image, torch.Tensor):
-        img = image.squeeze(0).permute(2, 0, 1)
-        pil_img = transforms.ToPILImage()(img)
+        arr = image.squeeze(0).detach().cpu().numpy()
+        arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+        pil_img = PILImage.fromarray(arr)
     else:
         pil_img = image
 

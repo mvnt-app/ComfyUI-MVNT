@@ -1,3 +1,4 @@
 requests>=2.31.0
 numpy>=1.24.0
 soundfile>=0.12.1
+Pillow>=10.0.0

@@ -4,7 +4,7 @@ description = "Music in, choreography out — generate full-body dance motion fr
 version = "1.1.0"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-dependencies = ["requests>=2.31.0", "numpy>=1.24.0"]
+dependencies = ["requests>=2.31.0", "numpy>=1.24.0", "soundfile>=0.12.1", "Pillow>=10.0.0"]
 
 [project.urls]
 Repository = "https://github.com/mvnt-app/ComfyUI-MVNT"
