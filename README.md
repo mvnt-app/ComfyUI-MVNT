@@ -2,194 +2,225 @@
 
 **Music in, choreography out.** Generate dance motion from audio using [MVNT](https://mvnt.studio) inside ComfyUI.
 
-> **Work in progress:** this custom node is being updated for MVNT's `/v1` API dogfood flow. The stable first target is `MVNT Generate Dance`: audio input, optional Tripo-style GLB/model input, motion output, and optional 3D/video preview outputs.
+This branch is the current MVNT `/v1` dogfood flow for ComfyUI. The main path is:
+
+```text
+Load Audio -> MVNT Audio Segment -> MVNT Generate Dance -> MVNT Preview Dance 3D
+```
+
+Optional character flows can prepare a T-pose image and connect a compatible rigged GLB/model to `MVNT Generate Dance`.
 
 ## Demo
 
-### MVNT + Kling AI — Motion Transfer
+### MVNT + Kling AI - Motion Transfer
 
 https://github.com/user-attachments/assets/mvnt_kling_usecase.mp4
 
-> Audio → AI dance choreography → photorealistic video via Kling motion transfer
+Audio -> AI dance choreography -> photorealistic video via Kling motion transfer
 
 https://github.com/mvnt-app/ComfyUI-MVNT/releases/download/v1.1.0/mvnt_kling_usecase.mp4
 
-### MVNT Studio — AI Dance Generation
+### MVNT Studio - AI Dance Generation
 
 https://github.com/mvnt-app/ComfyUI-MVNT/releases/download/v1.1.0/mS-demo-comp_480.mov
 
-> K-pop quality dance from any music track in ~15 seconds
+K-pop quality dance from any music track in about 15 seconds.
 
-## Current Nodes
+## Nodes
 
-| Node | Description |
-|------|-------------|
-| **MVNT Audio Segment** | Audio → MVNT-ready audio segment. Duration is capped at 40 seconds. |
-| **MVNT Image to T-Pose** | Source character image → T-pose character image using Tripo's internal T-pose regeneration. |
-| **MVNT Generate Dance** | Trimmed audio → previewable motion/animated GLB plus server-rendered MP4. A Tripo-style GLB can be connected as optional character input. |
-| **MVNT Preview Dance 3D** | Animated GLB path + source audio → interactive 3D preview with synced playback. |
+### Primary Dogfood Nodes
 
-Not shown in Comfy for this pass:
+| Node | What it does |
+| --- | --- |
+| `MVNT Audio Segment` | Selects the audio segment sent to MVNT. Duration is capped at 40 seconds. |
+| `MVNT Image to T-Pose` | Converts a source character image into a front-facing T-pose image through Tripo. |
+| `MVNT Generate Dance` | Sends trimmed audio to MVNT, polls the generation, downloads a previewable GLB and server-rendered MP4. |
+| `MVNT Preview Dance 3D` | Shows the generated animated GLB with ComfyUI's native 3D preview output and companion audio controls. |
 
-- `MVNT Load Motion`
-- `MVNT Preview BVH`
-- `MVNT List Styles`
-- `MVNT Estimate Cost`
-- `MVNT Export Video`
+### Helper And Legacy-Compatible Nodes
 
-Those helpers are still in the codebase for debugging/history, but the product-facing node list stays focused on image prep, audio prep, and dance generation.
+These remain registered so older workflows do not load with missing nodes.
+
+| Node | What it does |
+| --- | --- |
+| `MVNT List Styles` | Fetches style metadata from the MVNT API. |
+| `MVNT Estimate Cost` | Estimates generation cost/time for a given audio duration. |
+| `MVNT Generate Character` | Legacy/helper character generation wrapper. |
+| `MVNT Export Video` | Legacy/helper video export wrapper. |
+| `MVNT Load Motion` | Loads a local motion file for downstream nodes. |
+| `MVNT Preview BVH` | Renders a simple stick-figure BVH preview as image frames. |
 
 ## Example Workflows
 
-Ready-to-use workflows are in the [`workflows/`](./workflows) folder. Drag any `.json` file into ComfyUI to load it.
+Ready-to-use workflow templates live in [`workflows/`](./workflows). Drag a `.json` file into ComfyUI to load it.
 
 | Workflow | Description |
-|----------|-------------|
-| [Audio to Dance](./workflows/mvnt_audio_to_dance.json) | Current simple workflow: load audio → generate MVNT dance outputs |
-| [Image to T-Pose](./workflows/mvnt_image_to_tpose.json) | Load source character image → generate T-pose character image |
+| --- | --- |
+| [`mvnt_audio_to_dance.json`](./workflows/mvnt_audio_to_dance.json) | Smallest useful test: load audio, select a segment, generate MVNT dance outputs. |
+| [`mvnt_image_to_tpose.json`](./workflows/mvnt_image_to_tpose.json) | Load a source character image and generate a T-pose image. |
 
-Other workflow files in this repo are legacy concept examples from the earlier multi-node version. Update them before relying on them in this simplified pass.
+Do not commit personal exported workflows. ComfyUI exports often include local filenames, absolute output paths, and pasted API keys.
 
 ## Installation
 
-### Option A: ComfyUI Manager (recommended)
+### ComfyUI Manager
 
-Search for **MVNT** in the ComfyUI Manager and click Install.
+Search for **MVNT** in ComfyUI Manager and install it.
 
-### Option B: Comfy Registry
+### Comfy Registry
 
 ```bash
 comfy node registry-install comfyui-mvnt
 ```
 
-### Option C: Manual
+### Manual Install
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/mvnt-app/ComfyUI-MVNT.git
-cd ComfyUI-MVNT
-pip install -r requirements.txt
+git clone https://github.com/mvnt-app/ComfyUI-MVNT.git comfyui-mvnt
+cd comfyui-mvnt
+python3 -m pip install -r requirements.txt
 ```
 
-Restart ComfyUI.
+Restart ComfyUI after installation.
 
-## API Key Setup
-
-1. Request API access at [hello@mvnt.world](mailto:hello@mvnt.world) or join the [Discord](https://discord.gg/fKFExR3yWy) — early access is available now
-2. Set the environment variable before launching ComfyUI:
+For local development, point ComfyUI at this checkout:
 
 ```bash
-export MVNT_API_KEY=mvnt_live_xxxxxxxxxxxxx
+cd /path/to/ComfyUI/custom_nodes
+ln -s /path/to/ComfyUI-MVNT comfyui-mvnt
 ```
 
-Or pass the key directly to each node via the `api_key` input.
+## API Keys
 
-> API keys use the prefix `mvnt_live_` for production and `mvnt_test_` for sandbox testing. Legacy `mk_live_` and `mk_test_` keys remain accepted by the node while older test keys exist.
+Set your MVNT API key before launching ComfyUI:
+
+```bash
+export MVNT_API_KEY=mvnt_test_xxxxxxxxxxxxx
+```
+
+Or paste the key directly into the `api_key` field on nodes that expose it.
+
+Accepted MVNT key prefixes:
+
+- `mvnt_live_`
+- `mvnt_test_`
+- `mk_live_` legacy compatibility
+- `mk_test_` legacy compatibility
+
+`MVNT Image to T-Pose` also needs Tripo credentials:
+
+```bash
+export TRIPO_API_KEY=your_tripo_key_here
+```
+
+Never commit real keys in workflow JSON. If a key is accidentally committed, revoke it immediately.
 
 ## Quick Start
 
-### Simple: Audio → Dance
+### Audio To Dance
 
-1. Set `MVNT_API_KEY` before launching ComfyUI.
-2. Add **Load Audio** → **MVNT Audio Segment** → **MVNT Generate Dance**.
-3. In `MVNT Audio Segment`, choose the segment length and position with the two horizontal bars. Duration is capped at 40 seconds.
-4. Pick a style (`#K-Pop / All`, `#K-Pop / Boy`, `#K-Pop / Girl`, `#Challenge`, `#Poppin`, `#Hip-hop`, `#Krump`, or `#Jazz`).
-5. Paste your API key into `api_key`, or leave it empty if `MVNT_API_KEY` is already set.
-6. Queue. The node submits the trimmed audio to the MVNT API, polls for completion, and saves `.glb` and `.mp4` outputs under `ComfyUI/output/`.
-
-`MVNT Generate Dance` intentionally does not expose start/end controls. Audio segment selection belongs before the MVNT node, using `MVNT Audio Segment`. This keeps the generation node compact and closer to Comfy's modular workflow style.
-
-### Image Character → T-Pose Image
-
-Use the [Image to T-Pose](./workflows/mvnt_image_to_tpose.json) workflow when the user starts from a normal character image and needs a front-facing T-pose image.
-
-This workflow does not require local OpenPose, ControlNet, or checkpoint setup. The conversion is handled by **MVNT Image to T-Pose**, which internally calls Tripo's T-pose image regeneration.
-
-1. Load the original character image with **Source Character Image**.
-2. Connect it to **MVNT Image to T-Pose**.
-3. Set `TRIPO_API_KEY` before launching ComfyUI, or paste the key into `tripo_api_key`.
-4. Queue the workflow. The node returns a ComfyUI `IMAGE` output and saves the generated T-pose image under `ComfyUI/output/`.
-
-### Optional 3D Character Input
-
-If a compatible Tripo-style `GLB` or model file is connected, `MVNT Generate Dance` first generates the normal MVNT motion GLB, then asks the backend Tripo retargeter to apply that motion to the connected character. The `dance_3d` output becomes the retargeted Tripo animated GLB for Comfy's 3D preview. It does not silently return FBX/BVH in the `dance_3d` slot.
-
-`video_profile` controls the server render look:
-
-- `pretty`: main MVNT/Comfy video output. It keeps the character texture/color and uses the mvnt-mS toon studio look.
-- `kling`: reference-video output. It uses a deterministic gray mannequin style with the same camera and light rig.
-
-`MVNT Generate Dance` returns two outputs:
-
-- `dance_3d`: local GLB file path for 3D preview/retarget workflows.
-- `dance_video`: local MP4 file path saved under `ComfyUI/output/`.
-
-Use `dance_3d` together with the source/trimmed audio in **MVNT Preview Dance 3D** for review. Use `dance_video` for nodes that accept a local MP4 path string. If a downstream video node requires Comfy's native `VIDEO` object, load or convert the MP4 with that node's expected video loader first.
-
-The MP4 render is not intentionally capped at 90 frames by the Comfy node. The node requests the server-rendered MP4 for the generated job; the actual length comes from the generated/trimmed audio segment and the backend render endpoint. If you see a 90-frame video, that usually means the requested render duration was about 3 seconds at 30fps, not that Comfy clipped the output.
-
-MVNT's dance node does not reshape a raw image by itself. For image-to-character flows, prepare a T-pose image first, generate or rig the character with your preferred character tool, then connect the resulting GLB/model file to `character_glb`.
+1. Put an audio file in `ComfyUI/input/`.
+2. Load [`workflows/mvnt_audio_to_dance.json`](./workflows/mvnt_audio_to_dance.json), or create this chain manually:
 
 ```text
-Load Image
-  -> Image to T-Pose workflow
-  -> character generation / rigging tool
-      -> character_glb/model_file
-
 Load Audio
   -> MVNT Audio Segment
   -> MVNT Generate Dance
-      optional character_glb/model_file <- rigged character output from Tripo or another character tool
-      api_key <- paste mvnt_test_/mvnt_live_ key, or legacy mk_test_/mk_live_ key during dogfood
-      outputs:
-        dance_3d
-        dance_video
-
-dance_3d + audio
   -> MVNT Preview Dance 3D
 ```
 
-Meshy compatibility is not a target for this pass.
+3. In `MVNT Audio Segment`, choose a start time and duration. MVNT generation is capped at 40 seconds.
+4. In `MVNT Generate Dance`, choose a style and optional `video_profile`.
+5. Queue the workflow.
 
-## Sharing Workflows And Presets
+Expected outputs under `ComfyUI/output/`:
 
-The workflow `.json` files in this repo are safe review templates only when they keep API keys empty and use placeholder input filenames such as `input/my_song.wav`.
+```text
+mvnt_<generation_id>.motion.glb
+mvnt_<generation_id>.dance.mp4
+```
 
-Do not share a personal ComfyUI preset/workflow as-is if it contains:
+`MVNT Generate Dance` intentionally does not expose start/end controls. Segment selection belongs in `MVNT Audio Segment`.
 
-- local absolute file paths from your machine
-- private API keys
-- paid third-party service keys
-- user-specific image/audio/video filenames
+### Image To T-Pose
 
-For team review, export a cleaned workflow with empty key fields and replace local assets with placeholder names.
+1. Put a character image in `ComfyUI/input/`.
+2. Load [`workflows/mvnt_image_to_tpose.json`](./workflows/mvnt_image_to_tpose.json).
+3. Set `TRIPO_API_KEY`, or paste the key into `tripo_api_key`.
+4. Queue the workflow.
+
+The node returns a ComfyUI `IMAGE`, saves the generated T-pose image, and returns the Tripo task id.
+
+### Optional Character GLB
+
+If you already have a compatible rigged character GLB/model, connect it to `character_glb` on `MVNT Generate Dance`.
+
+When `character_glb` is connected:
+
+1. MVNT first generates the normal motion GLB.
+2. The node asks the backend retargeter to apply that motion to the character.
+3. The `dance_3d` output becomes the retargeted animated GLB.
+
+This flow targets Tripo-style GLB assets. Meshy compatibility is not a target for this pass.
+
+## Video Profiles
+
+`MVNT Generate Dance` exposes `video_profile`:
+
+- `pretty`: main MVNT/Comfy video output with the mvnt-mS toon studio look.
+- `kling`: reference-video output using a deterministic mannequin style for motion transfer.
+
+The MP4 length comes from the generated/trimmed audio segment and the backend render endpoint. The Comfy node does not intentionally clip video to 90 frames.
+
+## Full mS / Kling Workflows
+
+Some internal handoff workflows combine MVNT, Tripo, Kling, and Comfy video nodes:
+
+```text
+audio + character image
+  -> T-pose image
+  -> Tripo model + rig
+  -> MVNT dance generation
+  -> 3D preview / server MP4
+  -> Kling motion control video
+```
+
+Those are demo blueprints, not clean package examples. Before loading or sharing one:
+
+- remove all API keys
+- replace local filenames with files under your own `ComfyUI/input/`
+- remove absolute paths such as `C:/Users/...`
+- expect missing nodes unless Tripo/Kling custom nodes are installed
 
 ## API
 
-The nodes wrap the [MVNT Motion API](https://mvnt.io/docs) — a REST API with webhook support and async job processing.
+The nodes wrap the MVNT Motion API.
 
 | Endpoint | Description |
-|----------|-------------|
-| `POST /v1/generations` | Submit audio, optional character file, and generation settings |
-| `GET /v1/generations/:id` | Poll generation status |
-| `GET /v1/generations/:id/output` | Download motion, 3D, or preview/video outputs |
-| `GET /v1/styles` | List available dance styles |
-| `POST /v1/estimate` | Estimate cost and generation time |
+| --- | --- |
+| `POST /v1/generations` | Submit audio, optional character file, and generation settings. |
+| `GET /v1/generations/:id` | Poll generation status. |
+| `GET /v1/generations/:id/output` | Download motion, 3D, or preview/video outputs. |
+| `GET /v1/styles` | List available dance styles. |
+| `POST /v1/estimate` | Estimate cost and generation time. |
 
-**Environments:**
+Default environments:
+
 - Production: `https://api.mvnt.world/v1`
 - Sandbox: `https://api-sandbox.mvnt.world/v1`
 
-You can override the API base with either:
+Override the API base with:
 
-- the `MVNT_API_BASE` environment variable
-- an `api_base` input on helper/debug nodes that expose it
+```bash
+export MVNT_API_BASE=https://api-sandbox.mvnt.world/v1
+```
 
-The current platform UI creates `mk_live_` and `mk_test_` keys. The node also accepts the planned `mvnt_live_` / `mvnt_test_` prefixes for compatibility with future API key naming.
+Some helper/debug nodes also expose an `api_base` field.
 
 ## Credit Model
 
-For the custom node dogfood flow, downloads are treated as included outputs of a generation. Credits should be charged for API generation work, not for repeatedly downloading an already-created artifact.
+For the ComfyUI dogfood flow, downloads are treated as included outputs of a generation. Credits should be charged for generation work, not for repeatedly downloading an already-created artifact.
 
 Recommended v1 behavior:
 
@@ -197,14 +228,30 @@ Recommended v1 behavior:
 - Basic preview and downloads are included.
 - Advanced retargeting, high-quality toon render, or longer video render may become add-on credit events later.
 
-For integration support, reach out at hello@mvnt.world.
+## Troubleshooting
+
+### Old MVNT Nodes Still Show Up
+
+If you see nodes such as `MVNT Dance Generate`, `MVNT Dance Poll`, or `MVNT Dance (All-in-One)`, ComfyUI is loading an older MVNT custom node package.
+
+Remove or rename the old custom node folder/symlink, then restart ComfyUI.
+
+### Missing Tripo Or Kling Nodes
+
+The core MVNT audio-to-dance workflow does not require Tripo or Kling.
+
+Full demo workflows may require additional custom nodes such as `TripoImageToModelNode`, `TripoRigNode`, `KlingMotionControl`, and `SaveVideo`.
+
+### Preview 3D Looks Different Across ComfyUI Versions
+
+`MVNT Preview Dance 3D` uses ComfyUI's native preview output instead of importing private hashed frontend bundles. This avoids version-specific breakage, but the exact 3D viewer UI is controlled by your ComfyUI build.
 
 ## Links
 
-- [MVNT](https://mvnt.io) — Product & research
-- [MVNT Studio](https://mvnt.studio) — Creative suite for AI dance
-- [MVNT API Docs](https://mvnt.io/docs) — API reference
-- [Unreal Dance Editor](https://www.fab.com/listings/fd957cfb-c5af-4b22-a195-334548feb80d) — Dance generation native in Unreal Engine
+- [MVNT](https://mvnt.io)
+- [MVNT Studio](https://mvnt.studio)
+- [MVNT API Docs](https://mvnt.io/docs)
+- [Unreal Dance Editor](https://www.fab.com/listings/fd957cfb-c5af-4b22-a195-334548feb80d)
 
 ## License
 
