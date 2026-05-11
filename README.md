@@ -58,6 +58,7 @@ Ready-to-use workflow templates live in [`workflows/`](./workflows). Drag a `.js
 | --- | --- |
 | [`mvnt_audio_to_dance.json`](./workflows/mvnt_audio_to_dance.json) | Smallest useful test: load audio, select a segment, generate MVNT dance outputs. |
 | [`mvnt_image_to_tpose.json`](./workflows/mvnt_image_to_tpose.json) | Load a source character image and generate a T-pose image. |
+| [`mvnt_full_ms_review_flow.json`](./workflows/mvnt_full_ms_review_flow.json) | Cleaned team-review graph for the full mS handoff: audio, T-pose, Tripo, MVNT dance, preview, and Kling handoff. |
 
 Do not commit personal exported workflows. ComfyUI exports often include local filenames, absolute output paths, and pasted API keys.
 
@@ -192,6 +193,10 @@ Those are demo blueprints, not clean package examples. Before loading or sharing
 - replace local filenames with files under your own `ComfyUI/input/`
 - remove absolute paths such as `C:/Users/...`
 - expect missing nodes unless Tripo/Kling custom nodes are installed
+
+Use [`workflows/mvnt_full_ms_review_flow.json`](./workflows/mvnt_full_ms_review_flow.json) for team review. It is a cleaned copy of the current full graph: API keys are blank, local paths are removed, and input filenames are placeholders.
+
+For a spoken handoff, read [`docs/MVNT_COMFY_HANDOFF_kr.md`](./docs/MVNT_COMFY_HANDOFF_kr.md). For the API/server call map, read [`docs/MVNT_API_SERVER_FLOW_kr.md`](./docs/MVNT_API_SERVER_FLOW_kr.md).
 
 ## API
 
