@@ -9,19 +9,49 @@ import uuid
 import folder_paths
 import numpy as np
 import torch
+from comfy.utils import ProgressBar
 
 from . import mvnt_client
 
 try:
-    from comfy_api.latest import IO, UI, Types
+    from comfy_api.latest import IO, UI, Types, InputImpl
 except Exception:
     IO = None
     UI = None
     Types = None
+    InputImpl = None
 
 MVNTPreviewBase = IO.ComfyNode if IO is not None else object
 
 MAX_AUDIO_SECONDS = 40.0
+
+
+def _progress_bar(total=100):
+    return ProgressBar(total)
+
+
+def _set_progress(progress, value):
+    try:
+        current = int(max(0, min(100, round(float(value)))))
+    except (TypeError, ValueError):
+        return
+    progress.update_absolute(current)
+
+
+def _progress_mapper(progress, start=0, end=100):
+    span = max(0, end - start)
+
+    def on_progress(value):
+        try:
+            server_progress = float(str(value).strip().rstrip("%"))
+        except (TypeError, ValueError):
+            return
+        if server_progress <= 1:
+            server_progress *= 100
+        _set_progress(progress, start + server_progress * span / 100.0)
+
+    return on_progress
+
 
 MVNT_STYLE_CHOICES = [
     "#K-Pop / All",
@@ -86,6 +116,8 @@ class MVNTAudioSegment:
     def trim(self, audio, start_sec=0.0, duration_sec=20.0):
         import torch
 
+        progress = _progress_bar()
+        _set_progress(progress, 10)
         waveform = audio["waveform"]
         sample_rate = int(audio["sample_rate"])
         total_samples = _audio_sample_count(waveform)
@@ -105,6 +137,7 @@ class MVNTAudioSegment:
             trimmed = waveform[..., start_sample:end_sample].clone()
         else:
             trimmed = waveform[..., start_sample:end_sample]
+        _set_progress(progress, 80)
 
         info = {
             "total_sec": round(total_sec, 3),
@@ -113,6 +146,7 @@ class MVNTAudioSegment:
             "duration_sec": round(end - start, 3),
             "max_duration_sec": MAX_AUDIO_SECONDS,
         }
+        _set_progress(progress, 100)
         return ({"waveform": trimmed, "sample_rate": sample_rate}, json.dumps(info, ensure_ascii=False))
 
 
@@ -155,18 +189,23 @@ class MVNTImageToTPose:
         tripo_api_key="",
         tripo_api_base="",
     ):
+        progress = _progress_bar()
+        _set_progress(progress, 5)
         source_path = _save_image_to_temp(source_image)
         try:
+            _set_progress(progress, 12)
             task_id = mvnt_client.create_tripo_tpose_image(
                 source_path,
                 api_key=tripo_api_key or None,
                 api_base=tripo_api_base or None,
                 prompt=prompt,
             )
+            _set_progress(progress, 25)
             completed = mvnt_client.poll_tripo_task(
                 task_id,
                 api_key=tripo_api_key or None,
                 api_base=tripo_api_base or None,
+                on_progress=_progress_mapper(progress, 25, 80),
             )
             output_url = _first_tpose_output_url(completed)
 
@@ -176,11 +215,13 @@ class MVNTImageToTPose:
             out_dir = folder_paths.get_output_directory()
             file_id = task_id or "result"
             tpose_image_file = os.path.join(out_dir, f"mvnt_tpose_{file_id}.png")
+            _set_progress(progress, 88)
             mvnt_client.download_file_url(
                 output_url,
                 tpose_image_file,
             )
 
+            _set_progress(progress, 100)
             return (_load_image_file(tpose_image_file), tpose_image_file, task_id)
         finally:
             if source_path and os.path.exists(source_path):
@@ -208,7 +249,7 @@ class MVNTGenerateDance:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_TYPES = ("STRING", "VIDEO")
     RETURN_NAMES = (
         "dance_3d",
         "dance_video",
@@ -227,6 +268,8 @@ class MVNTGenerateDance:
         video_profile="pretty",
         api_key="",
     ):
+        progress = _progress_bar()
+        _set_progress(progress, 1)
         audio_path = _save_audio_to_temp(audio)
         print(f"[MVNT Generate Dance] raw character_glb={character_glb!r}")
         character_path = _coerce_optional_file_path(character_glb)
@@ -237,6 +280,7 @@ class MVNTGenerateDance:
             print(f"[MVNT Generate Dance] character_glb resolved: {character_path}")
 
         try:
+            _set_progress(progress, 5)
             result = mvnt_client.create_generation(
                 audio_path,
                 api_key=api_key or None,
@@ -255,12 +299,15 @@ class MVNTGenerateDance:
                 trim_end=0.0,
             )
             gen_id = mvnt_client.generation_id_from_response(result)
+            _set_progress(progress, 10)
 
             mvnt_client.poll_generation(
                 gen_id,
                 api_key=api_key or None,
                 api_base=None,
+                on_progress=_progress_mapper(progress, 10, 80),
             )
+            _set_progress(progress, 80)
 
             out_dir = folder_paths.get_output_directory()
             motion_glb_path = os.path.join(out_dir, f"mvnt_{gen_id}.motion.glb")
@@ -271,6 +318,7 @@ class MVNTGenerateDance:
                 api_key=api_key or None,
                 api_base=None,
             )
+            _set_progress(progress, 88)
 
             if not motion_glb:
                 raise RuntimeError(
@@ -292,22 +340,28 @@ class MVNTGenerateDance:
                     api_key=api_key or None,
                     api_base=None,
                 )
+                _set_progress(progress, 94)
 
             dance_video_path = os.path.join(out_dir, f"mvnt_{gen_id}.dance.mp4")
-            dance_video = _download_video_output(
+            dance_video_path = _download_video_output(
                 gen_id,
                 dance_video_path,
                 api_key=api_key or None,
                 api_base=None,
                 video_profile=video_profile,
             )
+            _set_progress(progress, 98)
 
-            if not dance_video:
+            if not dance_video_path:
                 raise RuntimeError(
                     "MVNT did not return an MP4 dance_video output. "
                     "The backend must expose /render-mp4-lda or a v1 render output for Comfy video export."
                 )
+            if InputImpl is None:
+                raise RuntimeError("Comfy Video API is unavailable in this ComfyUI build.")
+            dance_video = InputImpl.VideoFromFile(dance_video_path)
 
+            _set_progress(progress, 100)
             return (
                 dance_3d,
                 dance_video,
@@ -344,7 +398,7 @@ class MVNTPreviewDance3D(MVNTPreviewBase):
                     ],
                     tooltip="Animated GLB/model path from MVNT Generate Dance",
                 ),
-                IO.Audio.Input("audio"),
+                IO.Audio.Input("audio", optional=True),
                 IO.Load3DCamera.Input("camera_info", optional=True, advanced=True),
                 IO.Image.Input("bg_image", optional=True, advanced=True),
             ],
@@ -402,7 +456,10 @@ class MVNTListStyles:
 
     def list_styles(self, api_key=""):
         import json
+        progress = _progress_bar()
+        _set_progress(progress, 10)
         styles = mvnt_client.list_styles(api_key=api_key or None)
+        _set_progress(progress, 100)
         return (json.dumps(styles, indent=2),)
 
 
@@ -435,6 +492,8 @@ class MVNTEstimateCost:
     DESCRIPTION = "Estimate the cost and generation time for a given audio duration."
 
     def estimate(self, audio_duration, api_key="", api_base="", output_format="bvh", output_mode="both", has_character=False):
+        progress = _progress_bar()
+        _set_progress(progress, 10)
         result = mvnt_client.estimate_cost(
             audio_duration,
             api_key=api_key or None,
@@ -443,6 +502,7 @@ class MVNTEstimateCost:
             output_mode=output_mode,
             has_character=has_character,
         )
+        _set_progress(progress, 100)
         return (json.dumps(result, indent=2, ensure_ascii=False),)
 
 
@@ -484,6 +544,8 @@ class MVNTGenerateCharacter:
         model_version="v3.0-20250812",
         rigging=True,
     ):
+        progress = _progress_bar()
+        _set_progress(progress, 5)
         image_path = None
         if image is not None:
             image_path = _save_image_to_temp(image)
@@ -492,6 +554,7 @@ class MVNTGenerateCharacter:
             raise ValueError("Provide either an image or a text prompt.")
 
         try:
+            _set_progress(progress, 15)
             result = mvnt_client.create_character(
                 api_key=api_key or None,
                 image_path=image_path,
@@ -502,18 +565,25 @@ class MVNTGenerateCharacter:
                 rigging=rigging,
             )
             char_id = result["id"]
+            _set_progress(progress, 25)
 
-            completed = mvnt_client.poll_character(char_id, api_key=api_key or None)
+            completed = mvnt_client.poll_character(
+                char_id,
+                api_key=api_key or None,
+                on_progress=_progress_mapper(progress, 25, 82),
+            )
             output_url = _first_character_output_url(completed)
             character_glb = ""
             if output_url:
                 out_dir = folder_paths.get_output_directory()
                 character_glb = os.path.join(out_dir, f"mvnt_character_{char_id}.glb")
+                _set_progress(progress, 90)
                 mvnt_client.download_file_url(
                     output_url,
                     character_glb,
                     api_key=api_key or None,
                 )
+            _set_progress(progress, 100)
             return (character_glb, output_url, char_id)
         finally:
             if image_path and os.path.exists(image_path):
@@ -558,6 +628,8 @@ class MVNTExportVideo:
         keep_original_sound=True,
     ):
         import json
+        progress = _progress_bar()
+        _set_progress(progress, 10)
         result = mvnt_client.create_video(
             api_key=api_key or None,
             image_url=image_url,
@@ -567,9 +639,15 @@ class MVNTExportVideo:
             keep_original_sound=keep_original_sound,
         )
         vid_id = result["id"]
+        _set_progress(progress, 25)
 
-        completed = mvnt_client.poll_video(vid_id, api_key=api_key or None)
+        completed = mvnt_client.poll_video(
+            vid_id,
+            api_key=api_key or None,
+            on_progress=_progress_mapper(progress, 25, 95),
+        )
         urls = completed.get("output_urls", [])
+        _set_progress(progress, 100)
         return (json.dumps(urls), vid_id)
 
 
@@ -596,10 +674,13 @@ class MVNTLoadMotion:
     DESCRIPTION = "Read a motion file from disk and return its contents as a string."
 
     def load(self, file_path):
+        progress = _progress_bar()
+        _set_progress(progress, 20)
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Motion file not found: {file_path}")
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             data = f.read()
+        _set_progress(progress, 100)
         return (data,)
 
 
@@ -652,8 +733,11 @@ class MVNTPreviewBVH:
         line_width=3, bg_color="black", skeleton_color="cyan",
         joint_color="white", max_frames=300,
     ):
+        progress = _progress_bar()
+        _set_progress(progress, 5)
         joints, hierarchy, frames_raw = _parse_bvh(motion_data)
         parent_map = _build_parent_map(joints, hierarchy)
+        _set_progress(progress, 15)
 
         indices = list(range(0, len(frames_raw), fps_divisor))[:max_frames] or [0]
 
@@ -669,7 +753,8 @@ class MVNTPreviewBVH:
             span = 100.0
 
         images = []
-        for pos in all_pos:
+        total = max(1, len(all_pos))
+        for idx, pos in enumerate(all_pos):
             img = np.tile(bg, (height, width, 1))
             proj = _project(pos, center, span, width, height)
             for i, pi in enumerate(parent_map):
@@ -679,7 +764,10 @@ class MVNTPreviewBVH:
             for pt in proj:
                 _draw_circle(img, pt, r, jc)
             images.append(img)
+            if idx == 0 or idx == total - 1 or idx % 10 == 0:
+                _set_progress(progress, 20 + (idx + 1) * 75 / total)
 
+        _set_progress(progress, 100)
         return (torch.from_numpy(np.stack(images, axis=0)),)
 
 
@@ -951,22 +1039,38 @@ def _resolve_existing_file_path(value: str) -> str:
     return ""
 
 
+def _looks_like_glb_url(value: str) -> bool:
+    """Tripo generate_image 성공 output에 GLB URL이 섞이면 T-pose 래스터로 쓰면 안 된다."""
+    if not value or not isinstance(value, str):
+        return False
+    return value.lower().split("?", 1)[0].endswith(".glb")
+
+
 def _first_tpose_output_url(data) -> str:
     """Accept common output URL shapes from the T-pose image API."""
     if not isinstance(data, dict):
         return ""
     for key in ("output_url", "image_url", "tpose_image_url", "file_url", "url"):
         value = data.get(key)
-        if isinstance(value, str) and value:
+        if isinstance(value, str) and value and not _looks_like_glb_url(value):
             return value
 
     outputs = data.get("outputs") or data.get("output")
-    if isinstance(outputs, str) and outputs:
+    if isinstance(outputs, str) and outputs and not _looks_like_glb_url(outputs):
         return outputs
     if isinstance(outputs, dict):
-        for key in ("generated_image", "image", "tpose_image", "png", "file", "url"):
+        for key in (
+            "generated_image",
+            "image",
+            "rendered_image",
+            "result_image",
+            "tpose_image",
+            "png",
+            "file",
+            "url",
+        ):
             value = outputs.get(key)
-            if isinstance(value, str) and value:
+            if isinstance(value, str) and value and not _looks_like_glb_url(value):
                 return value
     if isinstance(outputs, list):
         for item in outputs:

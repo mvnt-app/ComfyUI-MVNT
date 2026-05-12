@@ -4,6 +4,7 @@ const SEGMENT_NODE = "MVNT Audio Segment";
 const MAX_SEGMENT_SECONDS = 40;
 const MIN_SEGMENT_SECONDS = 5;
 const PREVIEW_SEEK_THROTTLE_MS = 90;
+const AUDITION_SECONDS = 1.25;
 
 function findWidget(node, name) {
   return node.widgets?.find((widget) => widget.name === name);
@@ -113,10 +114,11 @@ function clampSegment(node) {
   }
 }
 
-function previewAt(node, seconds, { forceSeek = false } = {}) {
+function previewAt(node, seconds, { forceSeek = false, auditionSeconds = AUDITION_SECONDS } = {}) {
   const audio = ensureAudio(node);
   if (!audio) return;
 
+  clearTimeout(node.__mvntPreviewTimer);
   const now = performance.now();
   const shouldSeek =
     forceSeek ||
@@ -131,6 +133,12 @@ function previewAt(node, seconds, { forceSeek = false } = {}) {
   if (audio.paused) {
     audio.play().catch(() => {});
   }
+
+  const start = Number(findWidget(node, "start_sec")?.value || 0);
+  const duration = Number(findWidget(node, "duration_sec")?.value || 0);
+  const segmentEnd = duration > 0 ? start + duration : Number.POSITIVE_INFINITY;
+  const stopAfter = Math.max(0.1, Math.min(auditionSeconds, Math.max(0.1, segmentEnd - audio.currentTime)));
+  node.__mvntPreviewTimer = setTimeout(() => stopSegmentPreview(node), stopAfter * 1000);
 }
 
 function stopSegmentPreview(node) {
@@ -141,9 +149,7 @@ function stopSegmentPreview(node) {
 function playSegmentPreview(node) {
   const startWidget = findWidget(node, "start_sec");
   const start = Number(startWidget?.value || 0);
-  previewAt(node, start, { forceSeek: true });
-  clearTimeout(node.__mvntPreviewTimer);
-  node.__mvntPreviewTimer = setTimeout(() => stopSegmentPreview(node), 1200);
+  previewAt(node, start, { forceSeek: true, auditionSeconds: AUDITION_SECONDS });
 }
 
 function getBars(node) {

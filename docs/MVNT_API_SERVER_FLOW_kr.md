@@ -34,7 +34,7 @@ AUDIO
   -> _download_glb_output()
   -> optional retarget_tripo_glb()
   -> _download_video_output()
-  -> dance_3d, dance_video 반환
+  -> dance_3d path, dance_video VIDEO object 반환
 ```
 
 현재 generation 요청은 mS frontend와 맞추기 위해 다음 성격의 값을 보냅니다.
@@ -59,6 +59,8 @@ AUDIO
 ```
 
 이렇게 만든 GLB를 `dance_3d`로 사용합니다.
+
+MP4는 `_download_video_output()`으로 로컬 output 폴더에 저장한 뒤, Comfy의 `InputImpl.VideoFromFile(...)`로 감싸 `dance_video`에 반환합니다. 그래서 `SaveVideo` 같은 native `VIDEO` 입력 노드에 바로 연결할 수 있습니다.
 
 ## 4. Retarget 호출 흐름
 

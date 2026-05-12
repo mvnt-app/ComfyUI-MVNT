@@ -324,12 +324,14 @@ def poll_generation(
             api_key=api_key,
             timeout=kw.get("timeout", DEFAULT_TIMEOUT),
             poll_interval=kw.get("poll_interval", DEFAULT_POLL_INTERVAL),
+            on_progress=kw.get("on_progress"),
         )
     return _poll_until_done(
         f"{_base_url(api_base)}/generations/{generation_id}",
         _headers(key),
         timeout=kw.get("timeout", DEFAULT_TIMEOUT),
         poll_interval=kw.get("poll_interval", DEFAULT_POLL_INTERVAL),
+        on_progress=kw.get("on_progress"),
     )
 
 
@@ -339,6 +341,7 @@ def poll_legacy_generation(
     api_key: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
+    on_progress=None,
 ) -> dict:
     base = _legacy_base_url()
     headers = {"User-Agent": _USER_AGENT}
@@ -349,6 +352,7 @@ def poll_legacy_generation(
         headers,
         timeout=timeout,
         poll_interval=poll_interval,
+        on_progress=on_progress,
     )
 
 
@@ -668,6 +672,7 @@ def poll_tripo_task(
     api_base: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     poll_interval: float = 2.0,
+    on_progress=None,
 ) -> dict:
     key = _get_tripo_api_key(api_key)
     base = (api_base or os.environ.get("TRIPO_API_BASE") or DEFAULT_TRIPO_BASE_URL).rstrip("/")
@@ -682,6 +687,8 @@ def poll_tripo_task(
 
         data = body.get("data") or {}
         status = str(data.get("status", "")).lower()
+        if on_progress and "progress" in data:
+            on_progress(data["progress"])
         if status == "success":
             return data
         if status in {"failed", "cancelled", "canceled"}:
@@ -750,6 +757,7 @@ def poll_character(character_id: str, *, api_key: str | None = None, **kw) -> di
         _headers(key),
         timeout=kw.get("timeout", DEFAULT_TIMEOUT),
         poll_interval=kw.get("poll_interval", DEFAULT_POLL_INTERVAL),
+        on_progress=kw.get("on_progress"),
     )
 
 
@@ -791,4 +799,5 @@ def poll_video(video_id: str, *, api_key: str | None = None, **kw) -> dict:
         _headers(key),
         timeout=kw.get("timeout", DEFAULT_TIMEOUT),
         poll_interval=kw.get("poll_interval", DEFAULT_POLL_INTERVAL),
+        on_progress=kw.get("on_progress"),
     )

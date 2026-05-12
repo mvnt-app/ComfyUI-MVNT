@@ -32,7 +32,7 @@
         "Node name for S&R": "LoadAudio"
       },
       "widgets_values": [
-        "input/my_song.wav",
+        "",
         null,
         null
       ]
@@ -254,7 +254,7 @@
         "Node name for S&R": "LoadImage"
       },
       "widgets_values": [
-        "input/character_reference.png",
+        "",
         "image"
       ]
     },
@@ -513,7 +513,7 @@
         "Node name for S&R": "LoadImage"
       },
       "widgets_values": [
-        "input/video_reference_image.png",
+        "",
         "image"
       ]
     },

@@ -10,7 +10,7 @@
       "outputs": [
         {"name": "AUDIO", "type": "AUDIO", "links": [1]}
       ],
-      "widgets_values": ["input/my_song.wav"]
+      "widgets_values": [""]
     },
     {
       "id": 2,

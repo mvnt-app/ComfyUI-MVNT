@@ -10,7 +10,7 @@
       "outputs": [
         {"name": "AUDIO", "type": "AUDIO", "links": [1]}
       ],
-      "widgets_values": ["input/my_song.wav"]
+      "widgets_values": [""]
     },
     {
       "id": 2,
@@ -69,7 +69,7 @@
         {"name": "IMAGE", "type": "IMAGE", "links": [5]},
         {"name": "MASK", "type": "MASK", "links": []}
       ],
-      "widgets_values": ["character_photo.png", "image"]
+      "widgets_values": ["", "image"]
     },
     {
       "id": 7,

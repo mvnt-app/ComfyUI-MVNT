@@ -37,18 +37,9 @@ K-pop quality dance from any music track in about 15 seconds.
 | `MVNT Generate Dance` | Sends trimmed audio to MVNT, polls the generation, downloads a previewable GLB and server-rendered MP4. |
 | `MVNT Preview Dance 3D` | Shows the generated animated GLB with ComfyUI's native 3D preview output and companion audio controls. |
 
-### Helper And Legacy-Compatible Nodes
+### Internal Legacy Code
 
-These remain registered so older workflows do not load with missing nodes.
-
-| Node | What it does |
-| --- | --- |
-| `MVNT List Styles` | Fetches style metadata from the MVNT API. |
-| `MVNT Estimate Cost` | Estimates generation cost/time for a given audio duration. |
-| `MVNT Generate Character` | Legacy/helper character generation wrapper. |
-| `MVNT Export Video` | Legacy/helper video export wrapper. |
-| `MVNT Load Motion` | Loads a local motion file for downstream nodes. |
-| `MVNT Preview BVH` | Renders a simple stick-figure BVH preview as image frames. |
+Older helper nodes still exist in `nodes.py` for reference, but they are not registered in ComfyUI. The menu intentionally exposes only the four primary dogfood nodes above.
 
 ## Example Workflows
 
@@ -60,7 +51,7 @@ Ready-to-use workflow templates live in [`workflows/`](./workflows). Drag a `.js
 | [`mvnt_image_to_tpose.json`](./workflows/mvnt_image_to_tpose.json) | Load a source character image and generate a T-pose image. |
 | [`mvnt_full_ms_review_flow.json`](./workflows/mvnt_full_ms_review_flow.json) | Cleaned team-review graph for the full mS handoff: audio, T-pose, Tripo, MVNT dance, preview, and Kling handoff. |
 
-Do not commit personal exported workflows. ComfyUI exports often include local filenames, absolute output paths, and pasted API keys.
+Do not commit personal exported workflows. ComfyUI exports often include local filenames, absolute output paths, and pasted API keys. Shared workflows should leave `LoadImage`, `LoadAudio`, and API key widget values blank unless the referenced file is intentionally part of the repo.
 
 ## Installation
 
