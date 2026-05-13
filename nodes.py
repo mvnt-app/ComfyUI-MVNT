@@ -123,6 +123,10 @@ class MVNTAudioSegment:
 
     RETURN_TYPES = ("AUDIO", "STRING")
     RETURN_NAMES = ("audio", "segment_info")
+    OUTPUT_TOOLTIPS = (
+        "Trimmed audio segment ready to use as MVNT generation input.",
+        "JSON metadata describing the selected segment timing and duration.",
+    )
     FUNCTION = "trim"
     CATEGORY = "MVNT"
     DESCRIPTION = "Choose the audio segment MVNT should use. Duration is clamped to 40 seconds."
@@ -292,6 +296,10 @@ class MVNTGenerateDance:
     RETURN_NAMES = (
         "dance_3d",
         "dance_video",
+    )
+    OUTPUT_TOOLTIPS = (
+        "Local path to the generated or retargeted dance GLB for 3D preview and downstream use.",
+        "Generated MP4 dance preview loaded as a ComfyUI video output.",
     )
     FUNCTION = "generate"
     CATEGORY = "MVNT"
@@ -583,6 +591,11 @@ class MVNTGenerateCharacter:
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("character_glb", "character_file_url", "character_id")
+    OUTPUT_TOOLTIPS = (
+        "Local path to the generated rigged character GLB for preview or dance retargeting.",
+        "Remote MVNT output URL used to download the generated character file.",
+        "MVNT character generation job identifier for tracking or debugging.",
+    )
     FUNCTION = "generate"
     CATEGORY = "MVNT"
     DESCRIPTION = "Generate a T-pose rigged character GLB from an image or prompt. The local GLB output can feed MVNT Generate Dance."
