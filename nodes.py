@@ -101,9 +101,23 @@ class MVNTAudioSegment:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "audio": ("AUDIO",),
-                "start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1}),
-                "duration_sec": ("FLOAT", {"default": 20.0, "min": 0.1, "max": MAX_AUDIO_SECONDS, "step": 0.1}),
+                "audio": ("AUDIO", {
+                    "tooltip": "Input audio to trim before sending to MVNT."
+                }),
+                "start_sec": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 3600.0,
+                    "step": 0.1,
+                    "tooltip": "Start time, in seconds, where the MVNT-ready audio segment begins.",
+                }),
+                "duration_sec": ("FLOAT", {
+                    "default": 20.0,
+                    "min": 0.1,
+                    "max": MAX_AUDIO_SECONDS,
+                    "step": 0.1,
+                    "tooltip": "Length, in seconds, of the audio segment to keep; values are clamped to the MVNT maximum.",
+                }),
             },
         }
 
@@ -161,7 +175,9 @@ class MVNTImageToTPose:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "source_image": ("IMAGE",),
+                "source_image": ("IMAGE", {
+                    "tooltip": "Character image to regenerate into a front-facing T-pose."
+                }),
             },
             "optional": {
                 "prompt": (
@@ -169,10 +185,19 @@ class MVNTImageToTPose:
                     {
                         "default": "full body, front view",
                         "multiline": True,
+                        "tooltip": "Optional text guidance for the T-pose regeneration, such as pose or framing hints.",
                     },
                 ),
-                "tripo_api_key": ("STRING", {"default": "", "multiline": False}),
-                "tripo_api_base": ("STRING", {"default": "", "multiline": False}),
+                "tripo_api_key": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "Optional Tripo API key; leave blank to use the configured environment or server default.",
+                }),
+                "tripo_api_base": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "Optional Tripo API base URL for custom or proxy deployments; leave blank for the default endpoint.",
+                }),
             },
         }
 
@@ -239,13 +264,27 @@ class MVNTGenerateDance:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "audio": ("AUDIO",),
-                "style": (MVNT_STYLE_CHOICES, {"default": "#K-Pop / All"}),
+                "audio": ("AUDIO", {
+                    "tooltip": "Audio clip that drives the generated dance motion and preview video."
+                }),
+                "style": (MVNT_STYLE_CHOICES, {
+                    "default": "#K-Pop / All",
+                    "tooltip": "Dance style preset to request from MVNT for the generated motion.",
+                }),
             },
             "optional": {
-                "character_glb": ("*",),
-                "video_profile": (["pretty", "kling"], {"default": "pretty"}),
-                "api_key": ("STRING", {"default": "", "multiline": False}),
+                "character_glb": ("*", {
+                    "tooltip": "Optional character GLB/model to retarget the generated dance motion onto."
+                }),
+                "video_profile": (["pretty", "kling"], {
+                    "default": "pretty",
+                    "tooltip": "Rendering profile used when downloading the generated MP4 dance preview.",
+                }),
+                "api_key": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "Optional MVNT API key; leave blank to use the configured environment or server default.",
+                }),
             },
         }
 
@@ -396,11 +435,25 @@ class MVNTPreviewDance3D(MVNTPreviewBase):
                         IO.File3DFBX,
                         IO.File3DAny,
                     ],
-                    tooltip="Animated GLB/model path from MVNT Generate Dance",
+                    tooltip="Animated GLB or model file to display, usually the dance_3d output from MVNT Generate Dance.",
                 ),
-                IO.Audio.Input("audio", optional=True),
-                IO.Load3DCamera.Input("camera_info", optional=True, advanced=True),
-                IO.Image.Input("bg_image", optional=True, advanced=True),
+                IO.Audio.Input(
+                    "audio",
+                    optional=True,
+                    tooltip="Optional source audio to play alongside the 3D dance preview.",
+                ),
+                IO.Load3DCamera.Input(
+                    "camera_info",
+                    optional=True,
+                    advanced=True,
+                    tooltip="Optional saved 3D camera settings used to initialize the preview view.",
+                ),
+                IO.Image.Input(
+                    "bg_image",
+                    optional=True,
+                    advanced=True,
+                    tooltip="Optional background image displayed behind the 3D preview.",
+                ),
             ],
             outputs=[],
             description="Show MVNT animated GLB and audio together using Comfy's existing 3D and audio preview UI.",
