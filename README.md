@@ -49,6 +49,7 @@ Ready-to-use workflow templates live in [`workflows/`](./workflows). Drag a `.js
 
 | Workflow | Description |
 | --- | --- |
+| [`mvnt_4_2_music_to_3d_dance.json`](./workflows/mvnt_4_2_music_to_3d_dance.json) | `MVNT4.2: music_to_3d_dance` featured workflow: music -> animated 3D dance GLB, Comfy 3D preview, and optional 670x400 MP4 reference video. |
 | [`mvnt_audio_to_dance.json`](./workflows/mvnt_audio_to_dance.json) | Smallest useful test: load audio, select a segment, generate MVNT dance outputs. |
 | [`mvnt_image_to_tpose.json`](./workflows/mvnt_image_to_tpose.json) | Load a source character image and generate a T-pose image. |
 | [`mvnt_full_ms_review_flow.json`](./workflows/mvnt_full_ms_review_flow.json) | Cleaned team-review graph for the full mS handoff: audio, T-pose, Tripo, MVNT dance, preview, and Kling handoff. |
@@ -115,7 +116,7 @@ Never commit real keys in workflow JSON. If a key is accidentally committed, rev
 ### Audio To Dance
 
 1. Put an audio file in `ComfyUI/input/`.
-2. Load [`workflows/mvnt_audio_to_dance.json`](./workflows/mvnt_audio_to_dance.json), or create this chain manually:
+2. Load [`workflows/mvnt_4_2_music_to_3d_dance.json`](./workflows/mvnt_4_2_music_to_3d_dance.json), or create this chain manually:
 
 ```text
 Load Audio

@@ -13,4 +13,4 @@ Documentation = "https://mvnt.io/docs"
 [tool.comfy]
 PublisherId = "mvnt"
 DisplayName = "ComfyUI-MVNT"
-Icon = "https://mvnt.world/icon.png"
+Icon = "https://raw.githubusercontent.com/mvnt-app/ComfyUI-MVNT/snapshot/comfy-mvnt-current-20260515/assets/mvnt_icon.png"

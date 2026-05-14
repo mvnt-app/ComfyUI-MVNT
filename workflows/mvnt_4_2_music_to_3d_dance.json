@@ -915,6 +915,17 @@
         "id": 310,
         "parentId": 103
       }
+    ],
+    "info": {
+      "name": "MVNT4.2: music_to_3d_dance",
+      "description": "Generate animated 3D dance motion from music, then preview it in 3D or optionally render a 670x400 MP4 reference video.",
+      "author": "MVNT",
+      "version": "4.2"
+    },
+    "mvnt_notes": [
+      "Primary output is dance_3d GLB from MVNT Generate Dance.",
+      "Connect MVNT Render Dance Video only when a slower server MP4 reference is needed.",
+      "Replace local LoadAudio/LoadImage placeholders before running. Do not commit API keys in workflow JSON."
     ]
   },
   "version": 0.4
