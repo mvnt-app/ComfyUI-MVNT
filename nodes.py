@@ -165,74 +165,41 @@ class MVNTAudioSegment:
 # ---------------------------------------------------------------------------
 
 class MVNTImageToTPose:
-    """Convert a character image into a T-pose image using Tripo's image regeneration."""
+    """Convert a character image into a T-pose image using MVNT image preprocessing."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "source_image": ("IMAGE",),
-            },
-            "optional": {
-                "prompt": (
-                    "STRING",
-                    {
-                        "default": "full body, front view",
-                        "multiline": True,
-                    },
-                ),
-                "tripo_api_key": ("STRING", {"default": "", "multiline": False}),
-                "tripo_api_base": ("STRING", {"default": "", "multiline": False}),
-            },
+            }
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
-    RETURN_NAMES = ("tpose_image", "tpose_image_file", "tpose_job_id")
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("tpose_image",)
     FUNCTION = "generate"
     CATEGORY = "MVNT"
-    DESCRIPTION = "Source character image -> T-pose character image. The T-pose regeneration is handled internally."
+    DESCRIPTION = "Source character image -> T-pose character image through MVNT image preprocessing."
 
     def generate(
         self,
         source_image,
-        prompt="",
-        tripo_api_key="",
-        tripo_api_base="",
     ):
         progress = _progress_bar()
         _set_progress(progress, 5)
         source_path = _save_image_to_temp(source_image)
         try:
-            _set_progress(progress, 12)
-            task_id = mvnt_client.create_tripo_tpose_image(
-                source_path,
-                api_key=tripo_api_key or None,
-                api_base=tripo_api_base or None,
-                prompt=prompt,
-            )
-            _set_progress(progress, 25)
-            completed = mvnt_client.poll_tripo_task(
-                task_id,
-                api_key=tripo_api_key or None,
-                api_base=tripo_api_base or None,
-                on_progress=_progress_mapper(progress, 25, 80),
-            )
-            output_url = _first_tpose_output_url(completed)
-
-            if not output_url:
-                raise RuntimeError(f"Tripo T-pose image task did not include an output image URL: {completed}")
-
             out_dir = folder_paths.get_output_directory()
-            file_id = task_id or "result"
+            file_id = uuid.uuid4().hex[:12]
             tpose_image_file = os.path.join(out_dir, f"mvnt_tpose_{file_id}.png")
-            _set_progress(progress, 88)
-            mvnt_client.download_file_url(
-                output_url,
+            _set_progress(progress, 20)
+            mvnt_client.regenerate_tpose_image(
+                source_path,
                 tpose_image_file,
             )
 
             _set_progress(progress, 100)
-            return (_load_image_file(tpose_image_file), tpose_image_file, task_id)
+            return (_load_image_file(tpose_image_file),)
         finally:
             if source_path and os.path.exists(source_path):
                 os.remove(source_path)
@@ -1142,50 +1109,6 @@ def _job_id_from_generated_dance_path(path: str) -> str:
     name = os.path.basename(str(path).replace("\\", "/"))
     match = re.match(r"^mvnt_(.+?)\.(?:motion|tripo_retargeted)\.glb$", name, re.IGNORECASE)
     return match.group(1) if match else ""
-
-
-def _looks_like_glb_url(value: str) -> bool:
-    """Tripo generate_image 성공 output에 GLB URL이 섞이면 T-pose 래스터로 쓰면 안 된다."""
-    if not value or not isinstance(value, str):
-        return False
-    return value.lower().split("?", 1)[0].endswith(".glb")
-
-
-def _first_tpose_output_url(data) -> str:
-    """Accept common output URL shapes from the T-pose image API."""
-    if not isinstance(data, dict):
-        return ""
-    for key in ("output_url", "image_url", "tpose_image_url", "file_url", "url"):
-        value = data.get(key)
-        if isinstance(value, str) and value and not _looks_like_glb_url(value):
-            return value
-
-    outputs = data.get("outputs") or data.get("output")
-    if isinstance(outputs, str) and outputs and not _looks_like_glb_url(outputs):
-        return outputs
-    if isinstance(outputs, dict):
-        for key in (
-            "generated_image",
-            "image",
-            "rendered_image",
-            "result_image",
-            "tpose_image",
-            "png",
-            "file",
-            "url",
-        ):
-            value = outputs.get(key)
-            if isinstance(value, str) and value and not _looks_like_glb_url(value):
-                return value
-    if isinstance(outputs, list):
-        for item in outputs:
-            if isinstance(item, str) and item:
-                return item
-            if isinstance(item, dict):
-                value = _first_tpose_output_url(item)
-                if value:
-                    return value
-    return ""
 
 
 def _first_character_output_url(data) -> str:

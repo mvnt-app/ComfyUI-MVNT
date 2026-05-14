@@ -94,17 +94,16 @@ motion_glb + character_glb
 
 ## 6. T-pose image 호출 흐름
 
-`MVNT Image to T-Pose`는 MVNT generation 키가 아니라 Tripo 키를 사용합니다.
+`MVNT Image to T-Pose`는 외부 모델 API를 workflow에 노출하지 않고 MVNT image preprocessing endpoint만 사용합니다.
 
 ```text
 source image
-  -> Tripo upload
-  -> Tripo generate_image / T-pose regeneration task
-  -> poll task
-  -> output image download
+  -> POST https://api.mvnt.studio/image/tpose-regenerate
+  -> image/png response
+  -> ComfyUI IMAGE + saved PNG path
 ```
 
-따라서 팀원이 이 노드를 실행하려면 `TRIPO_API_KEY`가 필요합니다.
+provider API key, prompt, model setting은 서버에만 있고 ComfyUI workflow에는 넣지 않습니다. 다른 서버를 테스트할 때는 ComfyUI 실행 전 `MVNT_IMAGE_API_BASE` 환경변수만 바꿉니다.
 
 ## 7. 실서버 포트/레거시 정리 원칙
 

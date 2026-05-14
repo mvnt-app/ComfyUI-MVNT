@@ -34,7 +34,7 @@ K-pop quality dance from any music track in about 15 seconds.
 | Node | What it does |
 | --- | --- |
 | `MVNT Audio Segment` | Selects the audio segment sent to MVNT. Duration is capped at 40 seconds. |
-| `MVNT Image to T-Pose` | Converts a source character image into a front-facing T-pose image through Tripo. |
+| `MVNT Image to T-Pose` | Converts a source character image into a front-facing T-pose image through the MVNT image preprocessing endpoint. |
 | `MVNT Generate Dance` | Sends trimmed audio to MVNT, polls the generation, and returns a previewable animated GLB path. If a compatible character GLB is connected, the preview GLB is retargeted to that character. |
 | `MVNT Render Dance Video` | Optional second step that takes `dance_3d`, infers the MVNT job id, and downloads a server-rendered MP4 as a ComfyUI `VIDEO` output. |
 | `MVNT Preview Dance 3D` | Shows the generated animated GLB with ComfyUI's native 3D preview output and companion audio controls. |
@@ -103,12 +103,6 @@ Accepted MVNT key prefixes:
 - `mk_live_` legacy compatibility
 - `mk_test_` legacy compatibility
 
-`MVNT Image to T-Pose` also needs Tripo credentials:
-
-```bash
-export TRIPO_API_KEY=your_tripo_key_here
-```
-
 Never commit real keys in workflow JSON. If a key is accidentally committed, revoke it immediately.
 
 ## Quick Start
@@ -146,10 +140,11 @@ It also intentionally does not return `VIDEO`; MP4 rendering is separated so fas
 
 1. Put a character image in `ComfyUI/input/`.
 2. Load [`workflows/mvnt_image_to_tpose.json`](./workflows/mvnt_image_to_tpose.json).
-3. Set `TRIPO_API_KEY`, or paste the key into `tripo_api_key`.
-4. Queue the workflow.
+3. Queue the workflow.
 
-The node returns a ComfyUI `IMAGE`, saves the generated T-pose image, and returns the Tripo task id.
+The node calls the MVNT image preprocessing endpoint, returns a ComfyUI `IMAGE`, saves the generated T-pose image, and returns JSON metadata. The prompt, model, and API key stay on the backend; the Comfy node only needs `source_image`.
+
+For local server testing, override the endpoint with the `MVNT_IMAGE_API_BASE` environment variable before launching ComfyUI.
 
 ### Optional Character GLB
 

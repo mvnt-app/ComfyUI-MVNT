@@ -1,6 +1,6 @@
 """Lightweight wrapper around the MVNT API used by the ComfyUI nodes."""
 
-import logging
+import mimetypes
 import os
 import time
 import uuid
@@ -8,43 +8,12 @@ import requests
 
 DEFAULT_BASE_URL = "https://api.mvnt.world/v1"
 DEFAULT_LEGACY_BASE_URL = "https://api.mvnt.studio"
-DEFAULT_TRIPO_BASE_URL = "https://api.tripo3d.ai/v2/openapi"
 DEFAULT_POLL_INTERVAL = 3
 DEFAULT_TIMEOUT = 600
 
 _USER_AGENT = "comfyui-mvnt/1.2.0"
 _VALID_KEY_PREFIXES = ("mvnt_live_", "mvnt_test_", "mk_live_", "mk_test_")
 _GENERATION_BACKENDS: dict[str, str] = {}
-
-_LOG = logging.getLogger(__name__)
-
-_TRIPO_TPOSE_LEGACY_PROMPT = "full body, front view"
-
-
-def _infer_tripo_raster_type_from_path(path: str) -> str:
-    p = path.lower()
-    if p.endswith(".png"):
-        return "png"
-    if p.endswith(".webp"):
-        return "webp"
-    if p.endswith(".jpeg") or p.endswith(".jpg"):
-        return "jpg"
-    return "jpg"
-
-
-def _resolve_tripo_tpose_prompt(prompt: str | None) -> str:
-    """Match mvnt-mS tripo.ts: weak default prompts collapse identity for generate_image + t_pose."""
-    t = (prompt or "").strip()
-    identity = (
-        "Preserve the same character identity, face, hair, body proportions, clothing, and art style "
-        "as the reference image. Do not replace with a generic mannequin or a different person."
-    )
-    if not t or t.lower() == _TRIPO_TPOSE_LEGACY_PROMPT.lower():
-        return f"Full body, front view, strict T-pose. {identity}"
-    low = t.lower()
-    if "preserve the same character identity" in low and "reference image" in low:
-        return t
-    return f"{t} {identity}"
 
 
 def _base_url(api_base: str | None = None) -> str:
@@ -53,6 +22,10 @@ def _base_url(api_base: str | None = None) -> str:
 
 def _legacy_base_url() -> str:
     return (os.environ.get("MVNT_LEGACY_API_BASE") or DEFAULT_LEGACY_BASE_URL).rstrip("/")
+
+
+def _image_api_base_url(api_base: str | None = None) -> str:
+    return (api_base or os.environ.get("MVNT_IMAGE_API_BASE") or _legacy_base_url()).rstrip("/")
 
 
 def _get_api_key(api_key: str | None = None) -> str:
@@ -65,16 +38,6 @@ def _get_api_key(api_key: str | None = None) -> str:
     if not key.startswith(_VALID_KEY_PREFIXES):
         raise ValueError(
             "MVNT API key must start with mvnt_live_, mvnt_test_, mk_live_, or mk_test_."
-        )
-    return key
-
-
-def _get_tripo_api_key(api_key: str | None = None) -> str:
-    key = api_key or os.environ.get("TRIPO_API_KEY") or os.environ.get("MVNT_TRIPO_API_KEY") or ""
-    if not key:
-        raise ValueError(
-            "Tripo API key is required for MVNT Image to T-Pose. "
-            "Set TRIPO_API_KEY or pass tripo_api_key to the node."
         )
     return key
 
@@ -129,6 +92,58 @@ def _open_optional_file(path: str | None):
     if not os.path.exists(path):
         raise FileNotFoundError(f"Input file not found: {path}")
     return open(path, "rb")
+
+
+def regenerate_tpose_image(
+    source_image_path: str,
+    dest_path: str,
+    *,
+    api_base: str | None = None,
+    prompt: str = "",
+    model: str = "",
+    verify_ssl: bool | None = None,
+    timeout: float = 240,
+) -> dict:
+    """Call MVNT's T-pose image preprocessing endpoint and save the returned image."""
+    if not os.path.exists(source_image_path):
+        raise FileNotFoundError(f"Input image not found: {source_image_path}")
+
+    base = _image_api_base_url(api_base)
+    mime_type = mimetypes.guess_type(source_image_path)[0] or "image/png"
+    data = {}
+    if prompt and prompt.strip():
+        data["prompt"] = prompt.strip()
+    if model and model.strip():
+        data["model"] = model.strip()
+    if verify_ssl is None:
+        raw_verify = os.environ.get("MVNT_IMAGE_VERIFY_SSL", "true").strip().lower()
+        verify_ssl = raw_verify not in {"0", "false", "no", "off"}
+
+    with open(source_image_path, "rb") as image_file:
+        resp = requests.post(
+            f"{base}/image/tpose-regenerate",
+            headers={"User-Agent": _USER_AGENT},
+            files={"file": (os.path.basename(source_image_path), image_file, mime_type)},
+            data=data,
+            verify=bool(verify_ssl),
+            timeout=(10, timeout),
+        )
+
+    _raise_for_error(resp)
+    content_type = resp.headers.get("content-type", "image/png").split(";", 1)[0].strip()
+    if not content_type.startswith("image/"):
+        raise RuntimeError(f"MVNT T-pose endpoint returned non-image content-type: {content_type}")
+
+    os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+    with open(dest_path, "wb") as out_file:
+        out_file.write(resp.content)
+
+    return {
+        "output_path": dest_path,
+        "content_type": content_type,
+        "bytes": len(resp.content),
+        "prompt_version": resp.headers.get("x-mvnt-prompt-version", ""),
+    }
 
 
 def _is_glb_file(path: str) -> bool:
@@ -630,112 +645,6 @@ def estimate_cost(
     )
     _raise_for_error(resp)
     return resp.json()
-
-
-# ---------- Tripo Image to T-Pose ---------- #
-
-def create_tripo_upload(image_path: str, *, api_key: str | None = None, api_base: str | None = None) -> str:
-    key = _get_tripo_api_key(api_key)
-    base = (api_base or os.environ.get("TRIPO_API_BASE") or DEFAULT_TRIPO_BASE_URL).rstrip("/")
-
-    last_error = None
-    for attempt in range(3):
-        try:
-            with open(image_path, "rb") as image_file:
-                resp = requests.post(
-                    f"{base}/upload",
-                    headers=_headers(key),
-                    files={"file": image_file},
-                    timeout=(10, 90),
-                )
-            break
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
-            last_error = exc
-            if attempt == 2:
-                raise RuntimeError(
-                    "Could not reach Tripo upload API. This is usually a DNS/network issue on the ComfyUI machine. "
-                    f"Last error: {exc}"
-                ) from exc
-            time.sleep(2 + attempt * 3)
-    else:
-        raise RuntimeError(f"Could not reach Tripo upload API: {last_error}")
-    _raise_for_error(resp)
-    body = resp.json()
-    if body.get("code") != 0 or not body.get("data", {}).get("image_token"):
-        raise RuntimeError(f"Tripo image upload failed: {body.get('message') or body}")
-    return str(body["data"]["image_token"])
-
-
-def create_tripo_tpose_image(
-    source_image_path: str,
-    *,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    prompt: str = "full body, front view",
-) -> str:
-    key = _get_tripo_api_key(api_key)
-    base = (api_base or os.environ.get("TRIPO_API_BASE") or DEFAULT_TRIPO_BASE_URL).rstrip("/")
-    image_token = create_tripo_upload(source_image_path, api_key=api_key, api_base=api_base)
-
-    raster = _infer_tripo_raster_type_from_path(source_image_path)
-    resolved_prompt = _resolve_tripo_tpose_prompt(prompt)
-    _LOG.info(
-        "[MVNT Tripo] generate_image file.type=%s prompt_len=%d",
-        raster,
-        len(resolved_prompt),
-    )
-
-    resp = requests.post(
-        f"{base}/task",
-        headers={**_headers(key), "Content-Type": "application/json"},
-        json={
-            "type": "generate_image",
-            "model_version": "flux.1_kontext_pro",
-            "file": {"type": raster, "file_token": image_token},
-            "prompt": resolved_prompt,
-            "t_pose": True,
-        },
-        timeout=60,
-    )
-    _raise_for_error(resp)
-    body = resp.json()
-    if body.get("code") != 0 or not body.get("data", {}).get("task_id"):
-        raise RuntimeError(f"Tripo T-pose image task creation failed: {body.get('message') or body}")
-    return str(body["data"]["task_id"])
-
-
-def poll_tripo_task(
-    task_id: str,
-    *,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    timeout: float = DEFAULT_TIMEOUT,
-    poll_interval: float = 2.0,
-    on_progress=None,
-) -> dict:
-    key = _get_tripo_api_key(api_key)
-    base = (api_base or os.environ.get("TRIPO_API_BASE") or DEFAULT_TRIPO_BASE_URL).rstrip("/")
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        resp = requests.get(f"{base}/task/{task_id}", headers=_headers(key), timeout=30)
-        _raise_for_error(resp)
-        body = resp.json()
-        if body.get("code") != 0:
-            raise RuntimeError(f"Tripo task polling failed: {body.get('message') or body}")
-
-        data = body.get("data") or {}
-        status = str(data.get("status", "")).lower()
-        if on_progress and "progress" in data:
-            on_progress(data["progress"])
-        if status == "success":
-            return data
-        if status in {"failed", "cancelled", "canceled"}:
-            raise RuntimeError(f"Tripo task failed: {data.get('message') or task_id}")
-
-        time.sleep(poll_interval)
-
-    raise TimeoutError(f"Tripo task timed out after {timeout}s")
 
 
 # ---------- Legacy API helpers retained for older workflows ---------- #
