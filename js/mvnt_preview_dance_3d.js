@@ -1,18 +1,31 @@
 import { app } from "../../scripts/app.js";
 
 const NODE = "MVNTPreviewDance3D";
-const SERVICE_MODULES = [
-  "/assets/load3dService-DPBHfjWF.js",
-  "/assets/load3dService-Bgd80_fq.js",
-  "/assets/load3dService-B9rS34_t.js",
-];
+const SERVICE_MODULES = ["/assets/load3dService-Bgd80_fq.js", "/assets/load3dService-B9rS34_t.js"];
 const VIEW_H = 420;
 const BAR_H = 42;
-const TRACK_YAW_LERP = 0.018;
-const TRACK_POS_LERP = 0.06;
+const TRACK_YAW_LERP = 0.055;
+const TRACK_POS_LERP = 0.78;
+const TRACK_DISTANCE_FACTOR = 1.0;
+// Camera distance only: slightly farther than 2.45 (closer preview), still nearer than the old 2.65 default.
+const PREVIEW_DIST_FACTOR = 2.52;
+const PREVIEW_EYE_FACTOR = 1.08;
+const PREVIEW_TARGET_FACTOR = 0.82;
+const TRACK_SCREEN_Y_FACTOR = 0.34;
 const TRACK_TURN_IGNORE_RAD = (100 * Math.PI) / 180;
 const TRACK_SPIN_VEL_MAX = Math.PI * 1.5;
 let load3dPromise = null;
+
+const COMPONENT_SIZE = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+const NUM_COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+const COMPONENT_READERS = {
+  5120: "getInt8",
+  5121: "getUint8",
+  5122: "getInt16",
+  5123: "getUint16",
+  5125: "getUint32",
+  5126: "getFloat32",
+};
 
 async function importFirst(files) {
   let lastError;
@@ -25,17 +38,6 @@ async function importFirst(files) {
 function getLoad3dClass() {
   load3dPromise ||= importFirst(SERVICE_MODULES).then((m) => m.n || m.Load3d || m.default);
   return load3dPromise;
-}
-
-function showViewerError(state, title, error, modelUrl = "") {
-  const message = error?.message || String(error || "Unknown error");
-  state.viewer.innerHTML = `
-    <div style="padding:18px;color:#111827;background:#fef2f2;height:100%;box-sizing:border-box;overflow:auto;font-size:12px;line-height:1.5">
-      <div style="font-weight:700;margin-bottom:8px">${title}</div>
-      <div style="margin-bottom:8px">${message}</div>
-      ${modelUrl ? `<code style="word-break:break-all">${modelUrl}</code>` : ""}
-    </div>
-  `;
 }
 
 function viewUrl(value, fallbackType = "output") {
@@ -75,13 +77,97 @@ function payloadFromWidgets(node) {
   return model ? { model_file: model, audio: [] } : null;
 }
 
+function payloadFromStored(node) {
+  const payload = node.properties?.mvnt_preview_payload;
+  return payload?.model_file ? payload : null;
+}
+
 function payloadFromExecution(message) {
-  const payload =
-    message?.mvnt_preview ??
-    message?.ui?.mvnt_preview ??
-    message?.output?.mvnt_preview ??
-    message?.data?.mvnt_preview;
+  const payload = message?.mvnt_preview;
   return Array.isArray(payload) ? payload[0] || null : payload || null;
+}
+
+function parseGlb(data) {
+  const view = new DataView(data);
+  if (view.getUint32(0, true) !== 0x46546c67) return null;
+  let offset = 12;
+  let json = null;
+  let bin = null;
+  while (offset + 8 <= data.byteLength) {
+    const length = view.getUint32(offset, true);
+    const type = view.getUint32(offset + 4, true);
+    offset += 8;
+    const chunk = data.slice(offset, offset + length);
+    offset += length;
+    if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(chunk));
+    else if (type === 0x004e4942) bin = chunk;
+  }
+  return json && bin ? { json, bin } : null;
+}
+
+function readAccessor(gltf, bin, accessorIndex) {
+  const accessor = gltf.accessors?.[accessorIndex];
+  const view = accessor ? gltf.bufferViews?.[accessor.bufferView] : null;
+  if (!accessor || !view) return [];
+  const componentSize = COMPONENT_SIZE[accessor.componentType] || 4;
+  const components = NUM_COMPONENTS[accessor.type] || 1;
+  const stride = view.byteStride || componentSize * components;
+  const byteOffset = (view.byteOffset || 0) + (accessor.byteOffset || 0);
+  const dataView = new DataView(bin, byteOffset, view.byteLength - (accessor.byteOffset || 0));
+  const reader = COMPONENT_READERS[accessor.componentType] || "getFloat32";
+  const littleEndian = accessor.componentType !== 5120 && accessor.componentType !== 5121;
+  const values = [];
+  for (let i = 0; i < accessor.count; i++) {
+    const row = [];
+    const base = i * stride;
+    for (let c = 0; c < components; c++) {
+      row.push(dataView[reader](base + c * componentSize, littleEndian));
+    }
+    values.push(row);
+  }
+  return values;
+}
+
+async function loadRootMotionTrack(modelUrl) {
+  try {
+    const resp = await fetch(modelUrl, { cache: "no-store" });
+    const parsed = parseGlb(await resp.arrayBuffer());
+    if (!parsed?.json?.animations?.length) return null;
+    const { json, bin } = parsed;
+    const hipIndex = json.nodes?.findIndex((node) => /^(Hips|Hip|Root|Armature_Hips)$/i.test(node.name || ""));
+    if (hipIndex < 0) return null;
+    const channel = json.animations[0].channels?.find((ch) => ch.target?.node === hipIndex && ch.target?.path === "translation");
+    if (!channel) return null;
+    const sampler = json.animations[0].samplers?.[channel.sampler];
+    if (!sampler) return null;
+    const times = readAccessor(json, bin, sampler.input).map((v) => v[0] || 0);
+    const values = readAccessor(json, bin, sampler.output);
+    if (!times.length || !values.length) return null;
+    const base = values[0];
+    return { times, values, base };
+  } catch (error) {
+    console.warn("[MVNT Preview Dance 3D] root motion track read failed", error);
+    return null;
+  }
+}
+
+function sampleRootMotion(track, time) {
+  if (!track?.times?.length || !track?.values?.length) return null;
+  const times = track.times;
+  const values = track.values;
+  if (time <= times[0]) return values[0];
+  const last = times.length - 1;
+  if (time >= times[last]) return values[last];
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= time) lo = mid;
+    else hi = mid;
+  }
+  const span = Math.max(0.0001, times[hi] - times[lo]);
+  const t = (time - times[lo]) / span;
+  return values[lo].map((v, i) => v + (values[hi][i] - v) * t);
 }
 
 function ensureDom(node) {
@@ -126,9 +212,10 @@ function ensureDom(node) {
   const state = {
     root, viewer, play, tracking, label, range, audio,
     viewer3d: null, model: "", duration: 0, animationFrameId: 0, playing: false, lastMotionTime: 0,
-    viewerHover: false, windowWheelHandler: null, cameraTracking: true, trackingBone: null, trackingModel: null,
+    viewerHover: false, windowWheelHandler: null, cameraTracking: true, trackingBone: null, rootMotionTrack: null,
     smoothYaw: 0, smoothX: 0, smoothZ: 0, prevFaceYaw: 0, prevTrackingTime: -1,
-    trackDistance: 0, trackTargetY: 0, trackCameraY: 0, modelYawCorrection: 0,
+    trackDistance: 0, trackTargetY: 0, trackCameraY: 0, trackTargetYOffset: 0, trackCameraYOffset: 0,
+    trackBaseBoneX: 0, trackBaseBoneZ: 0, trackBaseTargetX: 0, trackBaseTargetZ: 0, trackBaseCameraX: 0, trackBaseCameraZ: 0,
   };
   const enterViewer = () => { state.viewerHover = true; state.viewer3d?.updateStatusMouseOnViewer?.(true); };
   const leaveViewer = () => { state.viewerHover = false; state.viewer3d?.updateStatusMouseOnViewer?.(false); };
@@ -257,6 +344,59 @@ function applyMvntSceneLook(state) {
   viewer.forceRender?.();
 }
 
+function getModelBounds(state) {
+  const model = state.viewer3d?.modelManager?.currentModel;
+  const camera = state.viewer3d?.getActiveCamera?.() || state.viewer3d?.cameraManager?.activeCamera;
+  if (!model || !camera?.position?.clone) return null;
+  const min = camera.position.clone();
+  const max = camera.position.clone();
+  min.set?.(Infinity, Infinity, Infinity);
+  max.set?.(-Infinity, -Infinity, -Infinity);
+  const point = camera.position.clone();
+  model.updateMatrixWorld?.(true);
+  model.traverse?.((object) => {
+    if (!object.isMesh || !object.geometry?.attributes?.position) return;
+    const attr = object.geometry.attributes.position;
+    for (let i = 0; i < attr.count; i++) {
+      point.fromBufferAttribute?.(attr, i);
+      point.applyMatrix4?.(object.matrixWorld);
+      min.min?.(point);
+      max.max?.(point);
+    }
+  });
+  if (!Number.isFinite(min.x) || !Number.isFinite(max.x)) return null;
+  return {
+    min, max,
+    height: Math.max(0.1, max.y - min.y),
+    centerX: (min.x + max.x) * 0.5,
+    centerY: (min.y + max.y) * 0.5,
+    centerZ: (min.z + max.z) * 0.5,
+  };
+}
+
+function applyInitialPreviewCamera(state) {
+  const camera = state.viewer3d?.getActiveCamera?.() || state.viewer3d?.cameraManager?.activeCamera;
+  const controls = state.viewer3d?.getControls?.() || state.viewer3d?.controlsManager?.controls;
+  const target = controls?.target;
+  const bounds = getModelBounds(state);
+  if (!camera || !target || !bounds) return;
+  const h = bounds.height;
+  const targetY = bounds.min.y + h * PREVIEW_TARGET_FACTOR;
+  const cameraY = bounds.min.y + h * PREVIEW_EYE_FACTOR;
+  const distance = Math.max(1.2, h * PREVIEW_DIST_FACTOR);
+
+  target.set?.(bounds.centerX, targetY, bounds.centerZ);
+  camera.position.set?.(bounds.centerX, cameraY, bounds.centerZ + distance);
+  camera.lookAt?.(target);
+  camera.updateProjectionMatrix?.();
+  camera.updateMatrixWorld?.(true);
+  controls.update?.();
+  state.trackDistance = distance;
+  state.trackTargetY = targetY;
+  state.trackCameraY = cameraY;
+  state.viewer3d?.forceRender?.();
+}
+
 function normalizeAngle(angle) {
   let a = angle;
   while (a > Math.PI) a -= Math.PI * 2;
@@ -266,25 +406,41 @@ function normalizeAngle(angle) {
 
 function findTrackingBone(model) {
   let best = null;
-  const names = ["Hips", "Hip", "Pelvis", "mixamorigHips", "Armature_Hips"];
+  const names = [
+    "Hips",
+    "Hip",
+    "mixamorigHips",
+    "mixamorig:Hips",
+    "Armature_Hips",
+    "Root",
+    "CC_Base_BoneRoot",
+    "pelvis",
+    "Pelvis",
+  ];
   model?.traverse?.((object) => {
     if (best || !object.isBone) return;
     if (names.includes(object.name)) best = object;
+  });
+  model?.traverse?.((object) => {
+    if (best || !object.isSkinnedMesh || !object.skeleton?.bones) return;
+    best = object.skeleton.bones.find((bone) => names.includes(bone.name)) || null;
   });
   if (best) return best;
   model?.traverse?.((object) => {
     if (!best && object.isBone && /hips?|pelvis/i.test(object.name || "")) best = object;
   });
-  if (best) return best;
   model?.traverse?.((object) => {
-    if (!best && object.isBone && /^root$/i.test(object.name || "")) best = object;
+    if (best || !object.isSkinnedMesh || !object.skeleton?.bones) return;
+    best = object.skeleton.bones.find((bone) => /hips?|pelvis/i.test(bone.name || "")) || null;
   });
   return best;
 }
 
-function getBoneWorldPosition(bone, camera) {
+function getBoneWorldPosition(state, bone, camera) {
   if (!bone || !camera?.position?.clone) return null;
   const v = camera.position.clone();
+  state.viewer3d?.modelManager?.currentModel?.updateMatrixWorld?.(true);
+  bone.updateMatrixWorld?.(true);
   bone.updateWorldMatrix?.(true, false);
   bone.getWorldPosition?.(v);
   return v;
@@ -301,22 +457,44 @@ function getBoneFaceYaw(bone, camera) {
   return Math.atan2(v.x || 0, v.z || 1);
 }
 
-function resetCameraTracking(state, keepCurrentCamera = false) {
+function resetCameraTracking(state, keepCurrentCamera = false, resetBase = true) {
   const camera = state.viewer3d?.getActiveCamera?.() || state.viewer3d?.cameraManager?.activeCamera;
   const controls = state.viewer3d?.getControls?.() || state.viewer3d?.controlsManager?.controls;
   const target = controls?.target;
   if (!camera || !target) return;
-  state.trackingModel?.updateMatrixWorld?.(true);
-  const bonePos = getBoneWorldPosition(state.trackingBone, camera);
-  if (!bonePos) return;
+  const bonePos = getBoneWorldPosition(state, state.trackingBone, camera);
+  const motionNow = sampleRootMotion(state.rootMotionTrack, state.viewer3d?.getAnimationTime?.() || 0);
+  if (!bonePos && !motionNow) return;
+  // Preserve the current camera orbit angle. The GLB hip yaw can be noisy after baking,
+  // so tracking root-motion delta first is closer to the stable mS viewer feel in Comfy.
+  state.smoothYaw = 0;
+  if (resetBase) {
+    const baseMotion = sampleRootMotion(state.rootMotionTrack, 0);
+    state.trackBaseBoneX = baseMotion ? baseMotion[0] : (motionNow ? motionNow[0] : bonePos.x);
+    state.trackBaseBoneZ = baseMotion ? baseMotion[2] : (motionNow ? motionNow[2] : bonePos.z);
+    state.trackBaseTargetX = state.trackBaseBoneX;
+    state.trackBaseTargetZ = state.trackBaseBoneZ;
+    state.trackBaseCameraX = camera.position?.x ?? 0;
+    state.trackBaseCameraZ = camera.position?.z ?? 0;
+  }
+  state.smoothX = motionNow ? motionNow[0] : bonePos.x;
+  state.smoothZ = motionNow ? motionNow[2] : bonePos.z;
   state.prevFaceYaw = getBoneFaceYaw(state.trackingBone, camera);
-  state.smoothYaw = normalizeAngle(state.prevFaceYaw + state.modelYawCorrection);
-  state.smoothX = bonePos.x;
-  state.smoothZ = bonePos.z;
   state.prevTrackingTime = -1;
-  state.trackDistance = Math.max(state.trackDistance || cameraDistance(camera, target), 1);
-  state.trackTargetY = target.y ?? bonePos.y;
-  state.trackCameraY = camera.position?.y ?? (bonePos.y + 1);
+  if (resetBase) {
+    state.trackDistance = Math.max((cameraDistance(camera, target) || state.trackDistance || 1) * TRACK_DISTANCE_FACTOR, 0.8);
+  } else if (state.trackDistance <= 0) {
+    state.trackDistance = Math.max(cameraDistance(camera, target), 1);
+  }
+  const baseY = motionNow ? motionNow[1] : bonePos.y;
+  if (resetBase) {
+    const bounds = getModelBounds(state);
+    const h = bounds?.height || 1.6;
+    state.trackTargetYOffset = Math.max(0.42, h * TRACK_SCREEN_Y_FACTOR);
+    state.trackCameraYOffset = Math.max(1.0, h * 0.68);
+  }
+  state.trackTargetY = baseY + state.trackTargetYOffset;
+  state.trackCameraY = baseY + state.trackCameraYOffset;
 }
 
 function updateCameraTracking(state, now) {
@@ -325,32 +503,26 @@ function updateCameraTracking(state, now) {
   const controls = state.viewer3d.getControls?.() || state.viewer3d.controlsManager?.controls;
   const target = controls?.target;
   if (!camera || !target) return;
-  state.trackingModel?.updateMatrixWorld?.(true);
-  const bonePos = getBoneWorldPosition(state.trackingBone, camera);
-  if (!bonePos) return;
+  const bonePos = getBoneWorldPosition(state, state.trackingBone, camera);
+  const motionNow = sampleRootMotion(state.rootMotionTrack, now);
+  if (!bonePos && !motionNow) return;
+  const followX = motionNow ? motionNow[0] : bonePos.x;
+  const followY = motionNow ? motionNow[1] : bonePos.y;
+  const followZ = motionNow ? motionNow[2] : bonePos.z;
 
-  const faceYaw = getBoneFaceYaw(state.trackingBone, camera);
-  const timeJump = state.prevTrackingTime >= 0 && Math.abs(now - state.prevTrackingTime) > 0.2;
+  const timeJump = state.prevTrackingTime >= 0 && Math.abs(now - state.prevTrackingTime) > 0.35;
   state.prevTrackingTime = now;
   if (state.trackDistance <= 0) state.trackDistance = Math.max(cameraDistance(camera, target), 1);
 
   if (timeJump) {
-    state.smoothX = bonePos.x;
-    state.smoothZ = bonePos.z;
-    state.prevFaceYaw = faceYaw;
-    state.smoothYaw = normalizeAngle(faceYaw + state.modelYawCorrection);
+    state.smoothX = followX;
+    state.smoothZ = followZ;
   } else {
-    const rawDelta = normalizeAngle(faceYaw - state.prevFaceYaw);
-    const angularVel = Math.abs(rawDelta) / Math.max(1 / 60, 0.001);
-    const targetYaw = normalizeAngle(faceYaw + state.modelYawCorrection);
-    const deltaYaw = normalizeAngle(targetYaw - state.smoothYaw);
-    if (angularVel < TRACK_SPIN_VEL_MAX && Math.abs(deltaYaw) < TRACK_TURN_IGNORE_RAD) {
-      state.smoothYaw = normalizeAngle(state.smoothYaw + deltaYaw * TRACK_YAW_LERP);
-    }
-    state.smoothX += (bonePos.x - state.smoothX) * TRACK_POS_LERP;
-    state.smoothZ += (bonePos.z - state.smoothZ) * TRACK_POS_LERP;
-    state.prevFaceYaw = faceYaw;
+    state.smoothX += (followX - state.smoothX) * TRACK_POS_LERP;
+    state.smoothZ += (followZ - state.smoothZ) * TRACK_POS_LERP;
   }
+  state.trackTargetY = followY + (state.trackTargetYOffset || 0);
+  state.trackCameraY = followY + (state.trackCameraYOffset || 0);
 
   camera.position.set?.(
     state.smoothX + Math.sin(state.smoothYaw) * state.trackDistance,
@@ -383,7 +555,8 @@ function seek(state) {
   const seconds = end * (Number(state.range.value || 0) / 100);
   state.viewer3d?.setAnimationTime?.(seconds);
   if (state.audio.src) state.audio.currentTime = seconds;
-  resetCameraTracking(state, true);
+  state.prevTrackingTime = -1;
+  updateCameraTracking(state, seconds);
   updateBar(state, seconds);
 }
 
@@ -419,6 +592,9 @@ function startSyncLoop(state) {
 async function mount(node, payload) {
   const state = ensureDom(node);
   const modelUrl = viewUrl(payload?.model_file, "output");
+  console.info("[MVNT Preview Dance 3D] mount", { payload, modelUrl });
+  node.properties ||= {};
+  node.properties.mvnt_preview_payload = payload;
   const audioPayload = payload?.audio;
   const audioUrl = viewUrl(Array.isArray(audioPayload) ? audioPayload[0] : audioPayload, "temp");
   if (audioUrl) state.audio.src = audioUrl;
@@ -426,31 +602,18 @@ async function mount(node, payload) {
   if (!modelUrl || (modelUrl === state.model && state.viewer3d)) return;
 
   state.model = modelUrl;
-  state.modelYawCorrection = /tripo|retarget/i.test(String(payload?.model_file || modelUrl)) ? Math.PI / 2 : 0;
+  const Load3d = await getLoad3dClass();
   stopSyncLoop(state);
   state.viewer3d?.dispose?.();
   state.viewer.innerHTML = "";
-  let Load3d;
-  try {
-    Load3d = await getLoad3dClass();
-  } catch (error) {
-    showViewerError(state, "Comfy Load3d viewer module could not be loaded.", error, modelUrl);
-    console.error("[MVNT Preview Dance 3D] Load3d import failed", error);
-    return;
-  }
-  try {
-    state.viewer3d = new Load3d(state.viewer, { width: 800, height: 600, isViewerMode: true });
-    await state.viewer3d.loadModel(modelUrl);
-  } catch (error) {
-    showViewerError(state, "GLB model could not be loaded in the 3D viewer.", error, modelUrl);
-    console.error("[MVNT Preview Dance 3D] model load failed", error);
-    return;
-  }
+  state.viewer3d = new Load3d(state.viewer, { width: 800, height: 600, isViewerMode: true });
+  await state.viewer3d.loadModel(modelUrl);
   state.viewer3d.updateStatusMouseOnViewer?.(true);
-  state.trackingModel = state.viewer3d.modelManager?.currentModel || null;
-  state.trackingBone = findTrackingBone(state.trackingModel);
+  state.rootMotionTrack = await loadRootMotionTrack(modelUrl);
+  state.trackingBone = findTrackingBone(state.viewer3d.modelManager?.currentModel);
   installWheelFallback(state);
   applyMvntSceneLook(state);
+  applyInitialPreviewCamera(state);
   resetCameraTracking(state, false);
   state.duration = state.viewer3d.getAnimationDuration?.() || 0;
   startSyncLoop(state);
@@ -469,7 +632,7 @@ app.registerExtension({
       created?.apply(this, arguments);
       ensureDom(this);
       setTimeout(() => {
-        const payload = payloadFromWidgets(this);
+        const payload = payloadFromWidgets(this) || payloadFromStored(this);
         if (payload) mount(this, payload);
       }, 300);
     };
@@ -485,7 +648,7 @@ app.registerExtension({
     nodeType.prototype.onConfigure = function () {
       const result = configured?.apply(this, arguments);
       setTimeout(() => {
-        const payload = payloadFromWidgets(this);
+        const payload = payloadFromWidgets(this) || payloadFromStored(this);
         if (payload) mount(this, payload);
       }, 300);
       return result;

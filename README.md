@@ -34,7 +34,7 @@ K-pop quality dance from any music track in about 15 seconds.
 | --- | --- |
 | `MVNT Audio Segment` | Selects the audio segment sent to MVNT. Duration is capped at 40 seconds. |
 | `MVNT Image to T-Pose` | Converts a source character image into a front-facing T-pose image through Tripo. |
-| `MVNT Generate Dance` | Sends trimmed audio to MVNT, polls the generation, downloads a previewable GLB and server-rendered MP4. |
+| `MVNT Generate Dance` | Sends trimmed audio to MVNT, polls the generation, downloads a previewable GLB and server-rendered MP4. If a compatible character GLB is connected, the preview GLB is retargeted to that character. |
 | `MVNT Preview Dance 3D` | Shows the generated animated GLB with ComfyUI's native 3D preview output and companion audio controls. |
 
 ### Internal Legacy Code

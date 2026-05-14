@@ -1,5 +1,6 @@
 """Lightweight wrapper around the MVNT API used by the ComfyUI nodes."""
 
+import logging
 import os
 import time
 import uuid
@@ -14,6 +15,36 @@ DEFAULT_TIMEOUT = 600
 _USER_AGENT = "comfyui-mvnt/1.2.0"
 _VALID_KEY_PREFIXES = ("mvnt_live_", "mvnt_test_", "mk_live_", "mk_test_")
 _GENERATION_BACKENDS: dict[str, str] = {}
+
+_LOG = logging.getLogger(__name__)
+
+_TRIPO_TPOSE_LEGACY_PROMPT = "full body, front view"
+
+
+def _infer_tripo_raster_type_from_path(path: str) -> str:
+    p = path.lower()
+    if p.endswith(".png"):
+        return "png"
+    if p.endswith(".webp"):
+        return "webp"
+    if p.endswith(".jpeg") or p.endswith(".jpg"):
+        return "jpg"
+    return "jpg"
+
+
+def _resolve_tripo_tpose_prompt(prompt: str | None) -> str:
+    """Match mvnt-mS tripo.ts: weak default prompts collapse identity for generate_image + t_pose."""
+    t = (prompt or "").strip()
+    identity = (
+        "Preserve the same character identity, face, hair, body proportions, clothing, and art style "
+        "as the reference image. Do not replace with a generic mannequin or a different person."
+    )
+    if not t or t.lower() == _TRIPO_TPOSE_LEGACY_PROMPT.lower():
+        return f"Full body, front view, strict T-pose. {identity}"
+    low = t.lower()
+    if "preserve the same character identity" in low and "reference image" in low:
+        return t
+    return f"{t} {identity}"
 
 
 def _base_url(api_base: str | None = None) -> str:
@@ -367,7 +398,6 @@ def download_generation_output(
     allow_missing: bool = False,
     **params,
 ) -> str:
-    key = _get_api_key(api_key)
     if _GENERATION_BACKENDS.get(generation_id) == "legacy":
         return download_legacy_generation_output(
             generation_id,
@@ -378,6 +408,7 @@ def download_generation_output(
             allow_missing=allow_missing,
             **params,
         )
+    key = _get_api_key(api_key)
     query = {}
     if kind:
         query["kind"] = kind
@@ -646,14 +677,22 @@ def create_tripo_tpose_image(
     base = (api_base or os.environ.get("TRIPO_API_BASE") or DEFAULT_TRIPO_BASE_URL).rstrip("/")
     image_token = create_tripo_upload(source_image_path, api_key=api_key, api_base=api_base)
 
+    raster = _infer_tripo_raster_type_from_path(source_image_path)
+    resolved_prompt = _resolve_tripo_tpose_prompt(prompt)
+    _LOG.info(
+        "[MVNT Tripo] generate_image file.type=%s prompt_len=%d",
+        raster,
+        len(resolved_prompt),
+    )
+
     resp = requests.post(
         f"{base}/task",
         headers={**_headers(key), "Content-Type": "application/json"},
         json={
             "type": "generate_image",
             "model_version": "flux.1_kontext_pro",
-            "file": {"type": "jpg", "file_token": image_token},
-            "prompt": prompt or "full body, front view",
+            "file": {"type": raster, "file_token": image_token},
+            "prompt": resolved_prompt,
             "t_pose": True,
         },
         timeout=60,

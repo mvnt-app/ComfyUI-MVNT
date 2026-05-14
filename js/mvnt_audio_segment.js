@@ -177,8 +177,6 @@ function setDurationFromBar(node, localX) {
   const raw = minSegment + ratio * (maxSegment - minSegment);
   durationWidget.value = Number(Math.max(minSegment, Math.min(maxSegment, raw)).toFixed(1));
   clampSegment(node);
-  const start = Number(findWidget(node, "start_sec")?.value || 0);
-  previewAt(node, start);
   node.setDirtyCanvas(true, true);
 }
 
@@ -327,8 +325,10 @@ function decorateAudioSegment(node) {
     widget.callback = function(value) {
       if (originalCallback) originalCallback.apply(this, arguments);
       clampSegment(node);
-      const start = Number(findWidget(node, "start_sec")?.value || 0);
-      previewAt(node, start);
+      if (widget.name === "start_sec") {
+        const start = Number(findWidget(node, "start_sec")?.value || 0);
+        previewAt(node, start);
+      }
       node.setDirtyCanvas(true, true);
       return value;
     };
