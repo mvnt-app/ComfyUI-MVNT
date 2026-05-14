@@ -46,7 +46,7 @@
 
 ## 4. 화면을 열고 설명하는 순서
 
-먼저 대표 workflow인 `workflows/mvnt_4_2_music_to_3d_dance.json`을 ComfyUI 캔버스에 드래그합니다. 이 파일의 표시 이름은 `MVNT4.2: music_to_3d_dance`입니다. 음악에서 animated 3D dance GLB를 만들고, Comfy 3D preview와 선택형 MP4 reference video까지 확인하는 현재 기준 workflow입니다.
+먼저 대표 workflow인 `workflows/MVNT4.2 - music_to_3d_dance.json`을 ComfyUI 캔버스에 드래그합니다. 이 파일의 표시 이름은 `MVNT4.2: music_to_3d_dance`입니다. 음악에서 animated 3D dance GLB를 만들고, Comfy 3D preview와 선택형 MP4 reference video까지 확인하는 현재 기준 workflow입니다.
 
 팀 내부 검토용으로는 `workflows/Full_mS_Flow_01.json` 또는 `workflows/mvnt_full_ms_review_flow.json`도 볼 수 있습니다. `Full_mS_Flow_01.json`은 사용자가 다시 export한 실제 full graph이고, `mvnt_full_ms_review_flow.json`은 키와 로컬 경로를 제거한 review용 cleaned copy입니다.
 
@@ -112,7 +112,7 @@ ComfyUI 노드가 직접 AI 모델을 돌리는 게 아니라, MVNT 백엔드 AP
 - `js/mvnt_audio_segment.js`: 오디오 구간 선택 UI입니다.
 - `js/mvnt_preview_dance_3d.js`: preview helper UI와 audio payload 연결입니다.
 - `workflows/mvnt_audio_to_dance.json`: 최소 audio-to-dance 테스트 workflow입니다.
-- `workflows/mvnt_4_2_music_to_3d_dance.json`: 대표 MVNT 4.2 workflow입니다. 음악에서 3D dance GLB를 만들고, 3D preview와 optional MP4 reference까지 연결합니다.
+- `workflows/MVNT4.2 - music_to_3d_dance.json`: 대표 MVNT 4.2 workflow입니다. 음악에서 3D dance GLB를 만들고, 3D preview와 optional MP4 reference까지 연결합니다.
 - `workflows/mvnt_image_to_tpose.json`: image-to-T-pose 테스트 workflow입니다.
 - `workflows/Full_mS_Flow_01.json`: 팀원이 전체 흐름을 열어볼 수 있는 full graph export입니다.
 - `workflows/mvnt_full_ms_review_flow.json`: 키와 로컬 경로를 제거한 review용 full graph입니다.
