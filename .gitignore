@@ -9,3 +9,6 @@ backups/
 # Local GLB/video render audit outputs
 kling_*.png
 kling_*.mp4
+
+# macOS
+.DS_Store

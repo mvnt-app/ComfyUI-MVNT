@@ -6,6 +6,7 @@ This branch is the current MVNT `/v1` dogfood flow for ComfyUI. The main path is
 
 ```text
 Load Audio -> MVNT Audio Segment -> MVNT Generate Dance -> MVNT Preview Dance 3D
+                                                        -> MVNT Render Dance Video (optional)
 ```
 
 Optional character flows can prepare a T-pose image and connect a compatible rigged GLB/model to `MVNT Generate Dance`.
@@ -34,7 +35,8 @@ K-pop quality dance from any music track in about 15 seconds.
 | --- | --- |
 | `MVNT Audio Segment` | Selects the audio segment sent to MVNT. Duration is capped at 40 seconds. |
 | `MVNT Image to T-Pose` | Converts a source character image into a front-facing T-pose image through Tripo. |
-| `MVNT Generate Dance` | Sends trimmed audio to MVNT, polls the generation, downloads a previewable GLB and server-rendered MP4. If a compatible character GLB is connected, the preview GLB is retargeted to that character. |
+| `MVNT Generate Dance` | Sends trimmed audio to MVNT, polls the generation, and returns a previewable animated GLB path. If a compatible character GLB is connected, the preview GLB is retargeted to that character. |
+| `MVNT Render Dance Video` | Optional second step that takes `dance_3d`, infers the MVNT job id, and downloads a server-rendered MP4 as a ComfyUI `VIDEO` output. |
 | `MVNT Preview Dance 3D` | Shows the generated animated GLB with ComfyUI's native 3D preview output and companion audio controls. |
 
 ### Internal Legacy Code
@@ -120,20 +122,24 @@ Load Audio
   -> MVNT Audio Segment
   -> MVNT Generate Dance
   -> MVNT Preview Dance 3D
+  -> MVNT Render Dance Video (optional MP4)
 ```
 
 3. In `MVNT Audio Segment`, choose a start time and duration. MVNT generation is capped at 40 seconds.
-4. In `MVNT Generate Dance`, choose a style and optional `video_profile`.
-5. Queue the workflow.
+4. In `MVNT Generate Dance`, choose a style.
+5. Connect `dance_3d` to `MVNT Preview Dance 3D` for fast 3D review.
+6. Only connect `dance_3d` to `MVNT Render Dance Video` when you need the slower server MP4.
+7. Queue the workflow.
 
 Expected outputs under `ComfyUI/output/`:
 
 ```text
 mvnt_<generation_id>.motion.glb
-mvnt_<generation_id>.dance.mp4
+mvnt_<generation_id>.dance.fetch.mp4  # only when MVNT Render Dance Video runs
 ```
 
 `MVNT Generate Dance` intentionally does not expose start/end controls. Segment selection belongs in `MVNT Audio Segment`.
+It also intentionally does not return `VIDEO`; MP4 rendering is separated so fast GLB preview does not wait on Blender rendering.
 
 ### Image To T-Pose
 
@@ -158,10 +164,12 @@ This flow targets Tripo-style GLB assets. Meshy compatibility is not a target fo
 
 ## Video Profiles
 
-`MVNT Generate Dance` exposes `video_profile`:
+`MVNT Render Dance Video` exposes `video_profile`:
 
 - `pretty`: main MVNT/Comfy video output with the mvnt-mS toon studio look.
 - `kling`: reference-video output using a deterministic mannequin style for motion transfer.
+
+The node requests `670x400 @ 30fps` MP4 output from the backend. The server-side Blender camera is tuned for full-body reference framing: feet should stay visible, the camera is wider than the 3D preview, and root travel is partially preserved instead of pinning hips exactly to the center.
 
 The MP4 length comes from the generated/trimmed audio segment and the backend render endpoint. The Comfy node does not intentionally clip video to 90 frames.
 
@@ -204,7 +212,8 @@ The nodes wrap the MVNT Motion API.
 Default environments:
 
 - Production: `https://api.mvnt.world/v1`
-- Sandbox: `https://api-sandbox.mvnt.world/v1`
+- Live legacy/render fallback: `https://api.mvnt.studio`
+- Sandbox candidate: `https://api-sandbox.mvnt.world/v1`
 
 Override the API base with:
 
@@ -213,6 +222,8 @@ export MVNT_API_BASE=https://api-sandbox.mvnt.world/v1
 ```
 
 Some helper/debug nodes also expose an `api_base` field.
+
+Operational note: current Comfy dogfood calls try the `/v1` API shape first, but generation, GLB download, retarget, and MP4 render still rely on the live `api.mvnt.studio` legacy/render paths when `/v1` output is unavailable.
 
 ## Credit Model
 

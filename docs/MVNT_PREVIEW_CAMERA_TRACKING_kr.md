@@ -35,6 +35,7 @@ mS 프론트의 카메라 트래킹은 `mvnt-mS/src/lib/components/ThreeScene.sv
 - grid 위치를 캐릭터 X/Z에 맞춰 이동.
 - `Tracking ON/OFF` 버튼 추가.
 - 기존 250ms `setInterval` 제거, `requestAnimationFrame` 기반 sync loop로 변경.
+- 마지막으로 실행된 `mvnt_preview` payload를 노드 properties에 저장. 다른 workflow로 갔다 돌아와도 GLB path가 남아 있으면 다시 mount한다.
 
 mS와 다른 점:
 
@@ -47,3 +48,9 @@ mS와 다른 점:
 Comfy의 `AUDIO` 입력은 프론트 JS에서 실행 전에는 실제 파일 URL로 접근할 수 없다. 따라서 `MVNT Preview Dance 3D` 노드를 실행하기 전에는 GLB만 widget 값으로 복원될 수 있고, 오디오 URL은 `onExecuted` payload가 와야 연결된다.
 
 즉 “0.0s / 20.0s”가 보이는 것은 GLB animation duration이고, 오디오가 연결되었다는 뜻은 아니다. 오디오는 노드 실행 후 `UI.PreviewAudio(audio)` 결과가 `mvnt_preview.audio`로 내려와야 재생 가능하다.
+
+## 서버 MP4 카메라와 다른 점
+
+Comfy 3D preview는 사용자가 실시간으로 확인하는 viewer라서 GLB root motion과 Hips를 부드럽게 따라가는 쪽이 좋다.
+
+반대로 `MVNT Render Dance Video`의 MP4는 Kling/reference video로도 쓰기 때문에 서버 Blender 쪽에서 더 넓게 찍는다. 현재 기준은 `670x400`, 전신 발/머리 보존, hips 100% 중앙 고정이 아니라 partial follow + smoothing이다. 이렇게 해야 옆이나 앞뒤로 이동하는 안무가 화면에서 제자리 슬라이딩처럼 죽지 않는다.
