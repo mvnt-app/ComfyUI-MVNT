@@ -1,8 +1,8 @@
 {
   "id": "0f938fb1-7cb9-4618-8c38-43d580c9d60b",
   "revision": 0,
-  "last_node_id": 145,
-  "last_link_id": 310,
+  "last_node_id": 147,
+  "last_link_id": 312,
   "nodes": [
     {
       "id": 9,
@@ -47,7 +47,7 @@
       },
       "widgets_values": [
         0,
-        20
+        10
       ]
     },
     {
@@ -62,7 +62,7 @@
         673.515625
       ],
       "flags": {},
-      "order": 10,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -91,7 +91,7 @@
         667.609375
       ],
       "flags": {},
-      "order": 8,
+      "order": 9,
       "mode": 0,
       "inputs": [
         {
@@ -142,7 +142,7 @@
         255.375
       ],
       "flags": {},
-      "order": 9,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
@@ -180,7 +180,7 @@
         251.21875
       ],
       "flags": {},
-      "order": 7,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
@@ -217,22 +217,22 @@
       "id": 137,
       "type": "TripoImageToModelNode",
       "pos": [
-        4960,
-        -580
+        5483.509088963734,
+        -579.2763016274193
       ],
       "size": [
         729.171875,
         372.96875
       ],
       "flags": {},
-      "order": 3,
+      "order": 5,
       "mode": 4,
       "showAdvanced": false,
       "inputs": [
         {
           "name": "image",
           "type": "IMAGE",
-          "link": 308
+          "link": 312
         }
       ],
       "outputs": [
@@ -278,15 +278,15 @@
       "id": 139,
       "type": "TripoRigNode",
       "pos": [
-        5756.638216121214,
-        -584.8034750667691
+        5751.138216121214,
+        -144.73977523140854
       ],
       "size": [
-        463.875,
-        372.90625
+        461.9375,
+        543
       ],
       "flags": {},
-      "order": 5,
+      "order": 6,
       "mode": 4,
       "inputs": [
         {
@@ -334,7 +334,7 @@
         512
       ],
       "flags": {},
-      "order": 11,
+      "order": 12,
       "mode": 4,
       "inputs": [
         {
@@ -420,7 +420,7 @@
         1080.53125
       ],
       "flags": {},
-      "order": 12,
+      "order": 13,
       "mode": 4,
       "inputs": [
         {
@@ -445,11 +445,11 @@
         -140.40915791065592
       ],
       "size": [
-        1260.765625,
-        524.875
+        729.03125,
+        537.640625
       ],
       "flags": {},
-      "order": 6,
+      "order": 7,
       "mode": 4,
       "inputs": [
         {
@@ -520,7 +520,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            308
+            311
           ]
         },
         {
@@ -568,6 +568,58 @@
         "",
         null,
         null
+      ]
+    },
+    {
+      "id": 146,
+      "type": "MVNT Image to T-Pose",
+      "pos": [
+        4965.753376066626,
+        -579.6827898587322
+      ],
+      "size": [
+        463.546875,
+        372.6875
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "source_image",
+          "type": "IMAGE",
+          "link": 311
+        }
+      ],
+      "outputs": [
+        {
+          "name": "tpose_image",
+          "type": "IMAGE",
+          "links": [
+            312
+          ]
+        },
+        {
+          "name": "tpose_image_file",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "tpose_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MVNT Image to T-Pose"
+      },
+      "widgets_values": [
+        "",
+        "",
+        "",
+        true,
+        "",
+        ""
       ]
     }
   ],
@@ -653,14 +705,6 @@
       "FILE_3D_GLB"
     ],
     [
-      308,
-      144,
-      0,
-      137,
-      0,
-      "IMAGE"
-    ],
-    [
       309,
       145,
       0,
@@ -675,6 +719,22 @@
       16,
       0,
       "AUDIO"
+    ],
+    [
+      311,
+      144,
+      0,
+      146,
+      0,
+      "IMAGE"
+    ],
+    [
+      312,
+      146,
+      0,
+      137,
+      0,
+      "IMAGE"
     ]
   ],
   "groups": [
@@ -718,10 +778,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.3007937207130647,
+      "scale": 0.28966437973668796,
       "offset": [
-        -3052.476832843924,
-        395.75794758528775
+        -2607.3830653131013,
+        1590.4314858069858
       ]
     },
     "reroutes": [
@@ -771,8 +831,8 @@
         "id": 93,
         "parentId": 94,
         "pos": [
-          5334.6900563740255,
-          465.87628496462327
+          5342.742606374026,
+          420.78200496462375
         ],
         "linkIds": [
           303,
@@ -781,10 +841,10 @@
       },
       {
         "id": 94,
-        "parentId": 100,
+        "parentId": 107,
         "pos": [
-          6298.194295957785,
-          458.21341148561527
+          6230.713926957785,
+          412.6529049457159
         ],
         "linkIds": [
           303,
@@ -796,7 +856,7 @@
         "parentId": 93,
         "pos": [
           4936.019986129901,
-          469.72651712840747
+          423.02172712840763
         ],
         "linkIds": [
           303
@@ -846,17 +906,6 @@
         ]
       },
       {
-        "id": 100,
-        "pos": [
-          6311.324796776018,
-          -503.9486917992842
-        ],
-        "linkIds": [
-          303,
-          307
-        ]
-      },
-      {
         "id": 101,
         "parentId": 95,
         "pos": [
@@ -887,9 +936,63 @@
         "linkIds": [
           310
         ]
+      },
+      {
+        "id": 104,
+        "parentId": 106,
+        "pos": [
+          6230.431091007216,
+          -196.5119810703061
+        ],
+        "linkIds": [
+          300
+        ]
+      },
+      {
+        "id": 105,
+        "parentId": 104,
+        "pos": [
+          5737.0241110072075,
+          -178.19180007030607
+        ],
+        "linkIds": [
+          300
+        ]
+      },
+      {
+        "id": 106,
+        "pos": [
+          6238.385193150013,
+          -530.6779664147056
+        ],
+        "linkIds": [
+          300
+        ]
+      },
+      {
+        "id": 107,
+        "pos": [
+          6244.832557150015,
+          -68.79833941470628
+        ],
+        "linkIds": [
+          303,
+          307
+        ]
       }
     ],
     "frontendVersion": "1.43.18",
+    "info": {
+      "name": "MVNT4.2: music_to_3d_dance",
+      "description": "Generate animated 3D dance motion from music, then preview it in 3D or optionally render a 670x400 MP4 reference video.",
+      "author": "MVNT",
+      "version": "4.2"
+    },
+    "mvnt_notes": [
+      "Primary output is dance_3d GLB from MVNT Generate Dance.",
+      "Connect MVNT Render Dance Video only when a slower server MP4 reference is needed.",
+      "Replace local LoadAudio/LoadImage placeholders before running. Do not commit API keys in workflow JSON."
+    ],
     "linkExtensions": [
       {
         "id": 290,
@@ -898,6 +1001,10 @@
       {
         "id": 296,
         "parentId": 77
+      },
+      {
+        "id": 300,
+        "parentId": 105
       },
       {
         "id": 301,
@@ -915,17 +1022,6 @@
         "id": 310,
         "parentId": 103
       }
-    ],
-    "info": {
-      "name": "MVNT4.2: music_to_3d_dance",
-      "description": "Generate animated 3D dance motion from music, then preview it in 3D or optionally render a 670x400 MP4 reference video.",
-      "author": "MVNT",
-      "version": "4.2"
-    },
-    "mvnt_notes": [
-      "Primary output is dance_3d GLB from MVNT Generate Dance.",
-      "Connect MVNT Render Dance Video only when a slower server MP4 reference is needed.",
-      "Replace local LoadAudio/LoadImage placeholders before running. Do not commit API keys in workflow JSON."
     ]
   },
   "version": 0.4
