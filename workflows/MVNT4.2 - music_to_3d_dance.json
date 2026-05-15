@@ -182,6 +182,7 @@
       "flags": {},
       "order": 8,
       "mode": 0,
+      "showAdvanced": false,
       "inputs": [
         {
           "name": "audio",
@@ -210,6 +211,9 @@
       },
       "widgets_values": [
         "#K-Pop / All",
+        "Creative",
+        -1,
+        "randomize",
         ""
       ]
     },
@@ -613,14 +617,7 @@
       "properties": {
         "Node name for S&R": "MVNT Image to T-Pose"
       },
-      "widgets_values": [
-        "",
-        "",
-        "",
-        true,
-        "",
-        ""
-      ]
+      "widgets_values": []
     }
   ],
   "links": [
@@ -778,10 +775,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.28966437973668796,
+      "scale": 0.47150144886625817,
       "offset": [
-        -2607.3830653131013,
-        1590.4314858069858
+        -4001.0159074233256,
+        944.244915402586
       ]
     },
     "reroutes": [
