@@ -87,6 +87,15 @@ MVNT_STYLE_TOKEN_MAP = {
 }
 
 
+MVNT_CREATIVE_LEVELS = ["Stable", "Normal", "Creative", "Wild"]
+MVNT_CREATIVE_LEVEL_MAP = {
+    "Stable": {"guidance": 2.0, "temperature": 0.8},
+    "Normal": {"guidance": 2.0, "temperature": 1.0},
+    "Creative": {"guidance": 2.0, "temperature": 1.2},
+    "Wild": {"guidance": 2.0, "temperature": 1.45},
+}
+
+
 def _mvnt_style_token(style: str) -> str:
     return MVNT_STYLE_TOKEN_MAP.get(str(style or "").strip(), "All")
 
@@ -221,7 +230,15 @@ class MVNTGenerateDance:
             },
             "optional": {
                 "character_glb": ("*",),
+                "creative_level": (MVNT_CREATIVE_LEVELS, {"default": "Creative"}),
                 "api_key": ("STRING", {"default": "", "multiline": False}),
+                "seed": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 2147483647,
+                    "control_after_generate": True,
+                    "advanced": True,
+                }),
             },
         }
 
@@ -239,7 +256,9 @@ class MVNTGenerateDance:
         audio,
         style="All",
         character_glb=None,
+        creative_level="Creative",
         api_key="",
+        seed=-1,
     ):
         progress = _progress_bar()
         _set_progress(progress, 1)
@@ -262,6 +281,11 @@ class MVNTGenerateDance:
             character_path = ""
         if character_path:
             print(f"[MVNT Generate Dance] character_glb resolved: {character_path}")
+        creative = MVNT_CREATIVE_LEVEL_MAP.get(str(creative_level or "Creative"), MVNT_CREATIVE_LEVEL_MAP["Creative"])
+        try:
+            generation_seed = int(seed)
+        except (TypeError, ValueError):
+            generation_seed = -1
 
         try:
             _set_progress(progress, 5)
@@ -274,9 +298,9 @@ class MVNTGenerateDance:
                 output_format="glb",
                 output_mode="both",
                 preview_style="mannequin",
-                seed=-1,
-                guidance=2.0,
-                temperature=1.2,
+                seed=generation_seed,
+                guidance=creative["guidance"],
+                temperature=creative["temperature"],
                 mode="standard",
                 save_hard_yaw_lock_variant=True,
                 trim_start=0.0,
@@ -1066,6 +1090,7 @@ def _is_default_mannequin_asset(path: str) -> bool:
     name = os.path.basename(str(path)).lower()
     return name in {
         "mumu.glb",
+        "mumu_kling.glb",
         "default_mannequin.glb",
         "m4_actor_glb_noface.glb",
         "m4_actor_glb.glb",
