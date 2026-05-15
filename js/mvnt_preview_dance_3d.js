@@ -12,6 +12,7 @@ const PREVIEW_DIST_FACTOR = 2.52;
 const PREVIEW_EYE_FACTOR = 1.08;
 const PREVIEW_TARGET_FACTOR = 0.82;
 const TRACK_SCREEN_Y_FACTOR = 0.34;
+const TRACK_VERTICAL_LERP = 0.08;
 const TRACK_TURN_IGNORE_RAD = (100 * Math.PI) / 180;
 const TRACK_SPIN_VEL_MAX = Math.PI * 1.5;
 let load3dPromise = null;
@@ -185,6 +186,9 @@ function ensureDom(node) {
   const tracking = document.createElement("button");
   tracking.textContent = "Tracking ON";
   tracking.style.cssText = "height:28px;border-radius:6px;border:1px solid #4b5563;background:#263241;color:white;cursor:pointer;font-size:11px";
+  const modelSwitch = document.createElement("button");
+  modelSwitch.textContent = "Character";
+  modelSwitch.style.cssText = "height:28px;border-radius:6px;border:1px solid #4b5563;background:#263241;color:white;cursor:pointer;font-size:11px";
   const label = document.createElement("span");
   label.textContent = "0.0s / 0.0s";
   label.style.cssText = "font-size:12px;color:#d1d5db;min-width:82px";
@@ -197,7 +201,7 @@ function ensureDom(node) {
   range.style.flex = "1";
   const audio = document.createElement("audio");
   audio.style.display = "none";
-  bar.append(play, tracking, label, range, audio);
+  bar.append(play, tracking, modelSwitch, label, range, audio);
   root.append(viewer, bar);
 
   const widget = node.addDOMWidget("mvnt_preview_dance3d", "mvnt_preview_dance3d", root, {
@@ -210,10 +214,11 @@ function ensureDom(node) {
   if (widget) widget.computeSize = (width) => [Math.max(420, width || node.size?.[0] || 620), VIEW_H + BAR_H];
 
   const state = {
-    root, viewer, play, tracking, label, range, audio,
+    root, viewer, play, tracking, modelSwitch, label, range, audio,
     viewer3d: null, model: "", duration: 0, animationFrameId: 0, playing: false, lastMotionTime: 0,
+    payload: null, modelMode: "character",
     viewerHover: false, windowWheelHandler: null, cameraTracking: true, trackingBone: null, rootMotionTrack: null,
-    smoothYaw: 0, smoothX: 0, smoothZ: 0, prevFaceYaw: 0, prevTrackingTime: -1,
+    smoothYaw: 0, smoothX: 0, smoothY: 0, smoothZ: 0, prevFaceYaw: 0, prevTrackingTime: -1,
     trackDistance: 0, trackTargetY: 0, trackCameraY: 0, trackTargetYOffset: 0, trackCameraYOffset: 0,
     trackBaseBoneX: 0, trackBaseBoneZ: 0, trackBaseTargetX: 0, trackBaseTargetZ: 0, trackBaseCameraX: 0, trackBaseCameraZ: 0,
   };
@@ -225,6 +230,7 @@ function ensureDom(node) {
   viewer.addEventListener("mouseleave", leaveViewer);
   play.addEventListener("click", () => toggle(state));
   tracking.addEventListener("click", () => toggleTracking(state));
+  modelSwitch.addEventListener("click", () => toggleModelMode(state));
   range.addEventListener("input", () => seek(state));
   audio.addEventListener("ended", () => {
     if (state.playing) {
@@ -233,6 +239,7 @@ function ensureDom(node) {
     }
   });
   updateTrackingButton(state);
+  updateModelSwitchButton(state);
   node.__mvntPreview = state;
   node.size = [Math.max(node.size?.[0] || 680, 680), Math.max(node.size?.[1] || 620, 620)];
   return state;
@@ -252,10 +259,64 @@ function updateTrackingButton(state) {
   state.tracking.style.background = state.cameraTracking ? "#263241" : "#1f2937";
 }
 
+function hasOriginalModel(state) {
+  return !!state.payload?.source_model_file;
+}
+
+function updateModelSwitchButton(state) {
+  if (!state.modelSwitch) return;
+  const canSwitch = hasOriginalModel(state);
+  state.modelSwitch.disabled = !canSwitch;
+  state.modelSwitch.textContent = state.modelMode === "original" ? "Original" : "Character";
+  state.modelSwitch.title = canSwitch ? "Switch between the retargeted character and original mannequin motion." : "Original mannequin GLB is available only for retargeted MVNT outputs.";
+  state.modelSwitch.style.opacity = canSwitch ? "1" : "0.45";
+  state.modelSwitch.style.background = state.modelMode === "original" ? "#3b2f1f" : "#263241";
+}
+
 function toggleTracking(state) {
   state.cameraTracking = !state.cameraTracking;
-  resetCameraTracking(state, true);
   updateTrackingButton(state);
+  resetCameraTracking(state, true);
+}
+
+function selectedModelFile(state) {
+  if (state.modelMode === "original" && state.payload?.source_model_file) return state.payload.source_model_file;
+  return state.payload?.model_file || "";
+}
+
+function toggleModelMode(state) {
+  if (!hasOriginalModel(state)) return;
+  state.modelMode = state.modelMode === "original" ? "character" : "original";
+  const current = state.viewer3d?.getAnimationTime?.() || state.audio.currentTime || 0;
+  const wasPlaying = state.playing;
+  loadSelectedModel(state, { seekTime: current, keepPlaying: wasPlaying });
+  updateModelSwitchButton(state);
+}
+
+function payloadKey(payload) {
+  return `${payload?.model_file || ""}|${payload?.source_model_file || ""}`;
+}
+
+function resetTrackingState(state) {
+  state.trackingBone = null;
+  state.rootMotionTrack = null;
+  state.smoothYaw = 0;
+  state.smoothX = 0;
+  state.smoothY = 0;
+  state.smoothZ = 0;
+  state.prevFaceYaw = 0;
+  state.prevTrackingTime = -1;
+  state.trackDistance = 0;
+  state.trackTargetY = 0;
+  state.trackCameraY = 0;
+  state.trackTargetYOffset = 0;
+  state.trackCameraYOffset = 0;
+  state.trackBaseBoneX = 0;
+  state.trackBaseBoneZ = 0;
+  state.trackBaseTargetX = 0;
+  state.trackBaseTargetZ = 0;
+  state.trackBaseCameraX = 0;
+  state.trackBaseCameraZ = 0;
 }
 
 function cameraDistance(camera, target) {
@@ -321,6 +382,7 @@ function applyMvntSceneLook(state) {
   if (viewer.sceneManager?.gridHelper) viewer.sceneManager.gridHelper.visible = true;
   if (viewer.renderer) {
     viewer.renderer.setClearColor?.(0xf6f1e8, 1);
+    viewer.renderer.domElement && (viewer.renderer.domElement.style.filter = "");
     viewer.renderer.shadowMap && (viewer.renderer.shadowMap.enabled = true);
   }
 
@@ -478,6 +540,7 @@ function resetCameraTracking(state, keepCurrentCamera = false, resetBase = true)
     state.trackBaseCameraZ = camera.position?.z ?? 0;
   }
   state.smoothX = motionNow ? motionNow[0] : bonePos.x;
+  state.smoothY = baseY;
   state.smoothZ = motionNow ? motionNow[2] : bonePos.z;
   state.prevFaceYaw = getBoneFaceYaw(state.trackingBone, camera);
   state.prevTrackingTime = -1;
@@ -516,13 +579,15 @@ function updateCameraTracking(state, now) {
 
   if (timeJump) {
     state.smoothX = followX;
+    state.smoothY = followY;
     state.smoothZ = followZ;
   } else {
     state.smoothX += (followX - state.smoothX) * TRACK_POS_LERP;
+    state.smoothY += (followY - state.smoothY) * TRACK_VERTICAL_LERP;
     state.smoothZ += (followZ - state.smoothZ) * TRACK_POS_LERP;
   }
-  state.trackTargetY = followY + (state.trackTargetYOffset || 0);
-  state.trackCameraY = followY + (state.trackCameraYOffset || 0);
+  state.trackTargetY = state.smoothY + (state.trackTargetYOffset || 0);
+  state.trackCameraY = state.smoothY + (state.trackCameraYOffset || 0);
 
   camera.position.set?.(
     state.smoothX + Math.sin(state.smoothYaw) * state.trackDistance,
@@ -589,34 +654,56 @@ function startSyncLoop(state) {
   state.animationFrameId = requestAnimationFrame(tick);
 }
 
-async function mount(node, payload) {
-  const state = ensureDom(node);
-  const modelUrl = viewUrl(payload?.model_file, "output");
-  console.info("[MVNT Preview Dance 3D] mount", { payload, modelUrl });
-  node.properties ||= {};
-  node.properties.mvnt_preview_payload = payload;
-  const audioPayload = payload?.audio;
-  const audioUrl = viewUrl(Array.isArray(audioPayload) ? audioPayload[0] : audioPayload, "temp");
-  if (audioUrl) state.audio.src = audioUrl;
-  else state.audio.removeAttribute("src");
+async function loadSelectedModel(state, options = {}) {
+  const modelUrl = viewUrl(selectedModelFile(state), "output");
   if (!modelUrl || (modelUrl === state.model && state.viewer3d)) return;
 
+  const seekTime = Math.max(0, Number(options.seekTime || 0));
+  const keepPlaying = !!options.keepPlaying;
   state.model = modelUrl;
   const Load3d = await getLoad3dClass();
   stopSyncLoop(state);
+  resetTrackingState(state);
   state.viewer3d?.dispose?.();
   state.viewer.innerHTML = "";
   state.viewer3d = new Load3d(state.viewer, { width: 800, height: 600, isViewerMode: true });
   await state.viewer3d.loadModel(modelUrl);
   state.viewer3d.updateStatusMouseOnViewer?.(true);
-  state.rootMotionTrack = await loadRootMotionTrack(modelUrl);
+  state.rootMotionTrack = state.modelMode === "original" ? await loadRootMotionTrack(modelUrl) : null;
   state.trackingBone = findTrackingBone(state.viewer3d.modelManager?.currentModel);
   installWheelFallback(state);
   applyMvntSceneLook(state);
   applyInitialPreviewCamera(state);
   resetCameraTracking(state, false);
   state.duration = state.viewer3d.getAnimationDuration?.() || 0;
+  if (seekTime > 0) {
+    state.viewer3d.setAnimationTime?.(Math.min(seekTime, state.duration || seekTime));
+    if (state.audio.src) state.audio.currentTime = Math.min(seekTime, state.audio.duration || seekTime);
+  }
+  state.playing = keepPlaying;
+  if (keepPlaying) {
+    state.viewer3d.toggleAnimation?.(true);
+    if (state.audio.src) state.audio.play().catch(() => {});
+  }
   startSyncLoop(state);
+  updateBar(state, seekTime);
+}
+
+async function mount(node, payload) {
+  const state = ensureDom(node);
+  const previousPayloadKey = payloadKey(state.payload);
+  console.info("[MVNT Preview Dance 3D] mount", { payload, modelUrl: viewUrl(payload?.model_file, "output") });
+  node.properties ||= {};
+  node.properties.mvnt_preview_payload = payload;
+  state.payload = payload;
+  if (payloadKey(payload) !== previousPayloadKey) state.modelMode = "character";
+  const audioPayload = payload?.audio;
+  const audioUrl = viewUrl(Array.isArray(audioPayload) ? audioPayload[0] : audioPayload, "temp");
+  if (audioUrl) state.audio.src = audioUrl;
+  else state.audio.removeAttribute("src");
+  updateModelSwitchButton(state);
+  await loadSelectedModel(state);
+  updateModelSwitchButton(state);
   updateBar(state);
   node.setDirtyCanvas(true, true);
 }

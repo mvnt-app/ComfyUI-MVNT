@@ -87,6 +87,15 @@ MVNT_STYLE_TOKEN_MAP = {
 }
 
 
+MVNT_CREATIVE_LEVELS = ["Stable", "Normal", "Creative", "Wild"]
+MVNT_CREATIVE_LEVEL_MAP = {
+    "Stable": {"guidance": 2.8, "temperature": 0.8},
+    "Normal": {"guidance": 2.4, "temperature": 1.0},
+    "Creative": {"guidance": 2.0, "temperature": 1.2},
+    "Wild": {"guidance": 1.6, "temperature": 1.45},
+}
+
+
 def _mvnt_style_token(style: str) -> str:
     return MVNT_STYLE_TOKEN_MAP.get(str(style or "").strip(), "All")
 
@@ -221,7 +230,15 @@ class MVNTGenerateDance:
             },
             "optional": {
                 "character_glb": ("*",),
+                "creative_level": (MVNT_CREATIVE_LEVELS, {"default": "Creative"}),
                 "api_key": ("STRING", {"default": "", "multiline": False}),
+                "seed": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 2147483647,
+                    "control_after_generate": True,
+                    "advanced": True,
+                }),
             },
         }
 
@@ -239,7 +256,9 @@ class MVNTGenerateDance:
         audio,
         style="All",
         character_glb=None,
+        creative_level="Creative",
         api_key="",
+        seed=-1,
     ):
         progress = _progress_bar()
         _set_progress(progress, 1)
@@ -262,6 +281,11 @@ class MVNTGenerateDance:
             character_path = ""
         if character_path:
             print(f"[MVNT Generate Dance] character_glb resolved: {character_path}")
+        creative = MVNT_CREATIVE_LEVEL_MAP.get(str(creative_level or "Creative"), MVNT_CREATIVE_LEVEL_MAP["Creative"])
+        try:
+            generation_seed = int(seed)
+        except (TypeError, ValueError):
+            generation_seed = -1
 
         try:
             _set_progress(progress, 5)
@@ -274,9 +298,9 @@ class MVNTGenerateDance:
                 output_format="glb",
                 output_mode="both",
                 preview_style="mannequin",
-                seed=-1,
-                guidance=2.0,
-                temperature=1.2,
+                seed=generation_seed,
+                guidance=creative["guidance"],
+                temperature=creative["temperature"],
                 mode="standard",
                 save_hard_yaw_lock_variant=True,
                 trim_start=0.0,
@@ -442,11 +466,13 @@ class MVNTPreviewDance3D(MVNTPreviewBase):
 
         camera_info = kwargs.get("camera_info", None)
         bg_image = kwargs.get("bg_image", None)
+        source_model_path = _source_motion_glb_for_preview(model_path)
         audio_ui = UI.PreviewAudio(audio, cls=cls).as_dict().get("audio", []) if audio is not None else []
         ui = {}
         ui.update(UI.PreviewUI3D(model_path, camera_info, bg_image=bg_image).as_dict())
         ui["mvnt_preview"] = [{
             "model_file": model_path,
+            "source_model_file": source_model_path,
             "audio": audio_ui,
         }]
         return IO.NodeOutput(ui=ui)
@@ -1109,6 +1135,62 @@ def _job_id_from_generated_dance_path(path: str) -> str:
     name = os.path.basename(str(path).replace("\\", "/"))
     match = re.match(r"^mvnt_(.+?)\.(?:motion|tripo_retargeted)\.glb$", name, re.IGNORECASE)
     return match.group(1) if match else ""
+
+
+def _source_motion_glb_for_preview(path: str) -> str:
+    """Find the original mannequin motion GLB beside a retargeted preview GLB."""
+    if not path:
+        return ""
+    name = os.path.basename(str(path).replace("\\", "/"))
+    match = re.match(r"^mvnt_(.+?)\.tripo_retargeted\.glb$", name, re.IGNORECASE)
+    if not match:
+        return ""
+    source_path = os.path.join(os.path.dirname(path), f"mvnt_{match.group(1)}.motion.glb")
+    return source_path if os.path.exists(source_path) else ""
+
+
+def _looks_like_glb_url(value: str) -> bool:
+    """Tripo generate_image 성공 output에 GLB URL이 섞이면 T-pose 래스터로 쓰면 안 된다."""
+    if not value or not isinstance(value, str):
+        return False
+    return value.lower().split("?", 1)[0].endswith(".glb")
+
+
+def _first_tpose_output_url(data) -> str:
+    """Accept common output URL shapes from the T-pose image API."""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("output_url", "image_url", "tpose_image_url", "file_url", "url"):
+        value = data.get(key)
+        if isinstance(value, str) and value and not _looks_like_glb_url(value):
+            return value
+
+    outputs = data.get("outputs") or data.get("output")
+    if isinstance(outputs, str) and outputs and not _looks_like_glb_url(outputs):
+        return outputs
+    if isinstance(outputs, dict):
+        for key in (
+            "generated_image",
+            "image",
+            "rendered_image",
+            "result_image",
+            "tpose_image",
+            "png",
+            "file",
+            "url",
+        ):
+            value = outputs.get(key)
+            if isinstance(value, str) and value and not _looks_like_glb_url(value):
+                return value
+    if isinstance(outputs, list):
+        for item in outputs:
+            if isinstance(item, str) and item:
+                return item
+            if isinstance(item, dict):
+                value = _first_tpose_output_url(item)
+                if value:
+                    return value
+    return ""
 
 
 def _first_character_output_url(data) -> str:
