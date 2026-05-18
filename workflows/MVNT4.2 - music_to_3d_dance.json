@@ -165,7 +165,7 @@
         "Node name for S&R": "MVNT Render Dance Video"
       },
       "widgets_values": [
-        "kling"
+        "Video Reference"
       ]
     },
     {
@@ -210,7 +210,9 @@
       },
       "widgets_values": [
         "#K-Pop / All",
-        ""
+        "Creative",
+        "",
+        -1
       ]
     },
     {
@@ -613,14 +615,7 @@
       "properties": {
         "Node name for S&R": "MVNT Image to T-Pose"
       },
-      "widgets_values": [
-        "",
-        "",
-        "",
-        true,
-        "",
-        ""
-      ]
+      "widgets_values": []
     }
   ],
   "links": [
@@ -778,10 +773,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.28966437973668796,
+      "scale": 0.35049389948139337,
       "offset": [
-        -2607.3830653131013,
-        1590.4314858069858
+        -3904.333126836012,
+        829.0603059664165
       ]
     },
     "reroutes": [
