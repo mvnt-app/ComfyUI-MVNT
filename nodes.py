@@ -124,6 +124,20 @@ def _coerce_generation_seed(seed) -> int:
         return -1
 
 
+MVNT_VIDEO_PROFILE_CHOICES = ["MVNT Original", "Video Reference"]
+MVNT_VIDEO_PROFILE_MAP = {
+    "MVNT Original": "pretty",
+    "Video Reference": "kling",
+    # Preserve older saved workflows that stored the raw backend values.
+    "pretty": "pretty",
+    "kling": "kling",
+}
+
+
+def _mvnt_video_profile_token(profile: str) -> str:
+    return MVNT_VIDEO_PROFILE_MAP.get(str(profile or "").strip(), "pretty")
+
+
 def _format_seconds(value) -> str:
     if value is None:
         return "unknown"
@@ -402,7 +416,7 @@ class MVNTRenderDanceVideo:
                 "dance_3d": ("STRING", {"default": "", "multiline": False, "forceInput": True}),
             },
             "optional": {
-                "video_profile": (["pretty", "kling"], {"default": "pretty"}),
+                "video_profile": (MVNT_VIDEO_PROFILE_CHOICES, {"default": "MVNT Original"}),
             },
         }
 
@@ -415,7 +429,7 @@ class MVNTRenderDanceVideo:
         "from the generated GLB filename. No API key widget here. Kling/video-AI stays downstream."
     )
 
-    def render(self, dance_3d, video_profile="pretty"):
+    def render(self, dance_3d, video_profile="MVNT Original"):
         dance_path = _coerce_optional_file_path(dance_3d)
         jid = _job_id_from_generated_dance_path(dance_path or str(dance_3d or ""))
         if not jid:
@@ -435,7 +449,7 @@ class MVNTRenderDanceVideo:
             dest,
             api_key=None,
             api_base=None,
-            video_profile=video_profile,
+            video_profile=_mvnt_video_profile_token(video_profile),
         )
         _set_progress(progress, 95)
         if not path or not os.path.isfile(path):
