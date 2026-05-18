@@ -4,6 +4,7 @@ import os
 import re
 import math
 import json
+import shutil
 import tempfile
 import uuid
 import importlib
@@ -89,15 +90,38 @@ MVNT_STYLE_TOKEN_MAP = {
 
 MVNT_CREATIVE_LEVELS = ["Stable", "Normal", "Creative", "Wild"]
 MVNT_CREATIVE_LEVEL_MAP = {
-    "Stable": {"guidance": 2.0, "temperature": 0.8},
-    "Normal": {"guidance": 2.0, "temperature": 1.0},
-    "Creative": {"guidance": 2.0, "temperature": 1.2},
-    "Wild": {"guidance": 2.0, "temperature": 1.45},
+    "Stable": {"guidance": 2.0, "temperature": 0.9, "mode": "standard"},
+    "Normal": {"guidance": 2.0, "temperature": 1.0, "mode": "standard"},
+    "Creative": {"guidance": 2.0, "temperature": 1.2, "mode": "standard"},
+    "Wild": {"guidance": 2.0, "temperature": 1.35, "mode": "standard"},
 }
 
 
 def _mvnt_style_token(style: str) -> str:
     return MVNT_STYLE_TOKEN_MAP.get(str(style or "").strip(), "All")
+
+
+def _repair_generate_dance_widget_shift(creative_level, api_key):
+    """Recover saved workflows from the temporary widget-order regression."""
+    creative = str(creative_level or "").strip()
+    key = str(api_key or "").strip()
+    for level in MVNT_CREATIVE_LEVELS:
+        if creative == level:
+            return creative, key
+        if creative.startswith(level):
+            suffix = creative[len(level):].strip()
+            if suffix.startswith(("mvnt_live_", "mvnt_test_", "mk_live_", "mk_test_")):
+                return level, suffix
+    if creative.startswith(("mvnt_live_", "mvnt_test_", "mk_live_", "mk_test_")) and key in MVNT_CREATIVE_LEVELS:
+        return key, creative
+    return (creative if creative in MVNT_CREATIVE_LEVELS else "Creative"), key
+
+
+def _coerce_generation_seed(seed) -> int:
+    try:
+        return int(seed)
+    except (TypeError, ValueError):
+        return -1
 
 
 def _format_seconds(value) -> str:
@@ -184,8 +208,8 @@ class MVNTImageToTPose:
             }
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("tpose_image",)
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("tpose_image", "tpose_image_file", "tpose_info")
     FUNCTION = "generate"
     CATEGORY = "MVNT"
     DESCRIPTION = "Source character image -> T-pose character image through MVNT image preprocessing."
@@ -202,13 +226,13 @@ class MVNTImageToTPose:
             file_id = uuid.uuid4().hex[:12]
             tpose_image_file = os.path.join(out_dir, f"mvnt_tpose_{file_id}.png")
             _set_progress(progress, 20)
-            mvnt_client.regenerate_tpose_image(
+            info = mvnt_client.regenerate_tpose_image(
                 source_path,
                 tpose_image_file,
             )
 
             _set_progress(progress, 100)
-            return (_load_image_file(tpose_image_file),)
+            return (_load_image_file(tpose_image_file), tpose_image_file, json.dumps(info, ensure_ascii=False))
         finally:
             if source_path and os.path.exists(source_path):
                 os.remove(source_path)
@@ -227,18 +251,12 @@ class MVNTGenerateDance:
             "required": {
                 "audio": ("AUDIO",),
                 "style": (MVNT_STYLE_CHOICES, {"default": "#K-Pop / All"}),
+                "creative_level": (MVNT_CREATIVE_LEVELS, {"default": "Creative"}),
             },
             "optional": {
                 "character_glb": ("*",),
-                "creative_level": (MVNT_CREATIVE_LEVELS, {"default": "Creative"}),
                 "api_key": ("STRING", {"default": "", "multiline": False}),
-                "seed": ("INT", {
-                    "default": -1,
-                    "min": -1,
-                    "max": 2147483647,
-                    "control_after_generate": True,
-                    "advanced": True,
-                }),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1, "control_after_generate": False, "advanced": True}),
             },
         }
 
@@ -255,8 +273,8 @@ class MVNTGenerateDance:
         self,
         audio,
         style="All",
-        character_glb=None,
         creative_level="Creative",
+        character_glb=None,
         api_key="",
         seed=-1,
     ):
@@ -281,13 +299,11 @@ class MVNTGenerateDance:
             character_path = ""
         if character_path:
             print(f"[MVNT Generate Dance] character_glb resolved: {character_path}")
-        creative = MVNT_CREATIVE_LEVEL_MAP.get(str(creative_level or "Creative"), MVNT_CREATIVE_LEVEL_MAP["Creative"])
-        try:
-            generation_seed = int(seed)
-        except (TypeError, ValueError):
-            generation_seed = -1
 
         try:
+            creative_level, api_key = _repair_generate_dance_widget_shift(creative_level, api_key)
+            creative = MVNT_CREATIVE_LEVEL_MAP.get(str(creative_level or "").strip(), MVNT_CREATIVE_LEVEL_MAP["Creative"])
+            generation_seed = _coerce_generation_seed(seed)
             _set_progress(progress, 5)
             result = mvnt_client.create_generation(
                 audio_path,
@@ -301,7 +317,7 @@ class MVNTGenerateDance:
                 seed=generation_seed,
                 guidance=creative["guidance"],
                 temperature=creative["temperature"],
-                mode="standard",
+                mode=creative["mode"],
                 save_hard_yaw_lock_variant=True,
                 trim_start=0.0,
                 trim_end=0.0,
@@ -319,6 +335,8 @@ class MVNTGenerateDance:
 
             out_dir = folder_paths.get_output_directory()
             motion_glb_path = os.path.join(out_dir, f"mvnt_{gen_id}.motion.glb")
+            audio_copy_path = os.path.join(out_dir, f"mvnt_{gen_id}.audio.wav")
+            shutil.copyfile(audio_path, audio_copy_path)
 
             motion_glb = _download_glb_output(
                 gen_id,
@@ -350,6 +368,18 @@ class MVNTGenerateDance:
                 )
                 _set_progress(progress, 94)
 
+            _write_render_sidecar(
+                dance_3d,
+                {
+                    "job_id": gen_id,
+                    "motion_glb": motion_glb,
+                    "character_glb": character_path or "",
+                    "audio": audio_copy_path,
+                    "dance_3d": dance_3d,
+                    "creative_level": creative_level,
+                    "seed": generation_seed,
+                },
+            )
             _set_progress(progress, 100)
             return (dance_3d,)
         finally:
@@ -1136,6 +1166,50 @@ def _job_id_from_generated_dance_path(path: str) -> str:
     return match.group(1) if match else ""
 
 
+def _looks_like_glb_url(value: str) -> bool:
+    """Tripo generate_image 성공 output에 GLB URL이 섞이면 T-pose 래스터로 쓰면 안 된다."""
+    if not value or not isinstance(value, str):
+        return False
+    return value.lower().split("?", 1)[0].endswith(".glb")
+
+
+def _first_tpose_output_url(data) -> str:
+    """Accept common output URL shapes from the T-pose image API."""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("output_url", "image_url", "tpose_image_url", "file_url", "url"):
+        value = data.get(key)
+        if isinstance(value, str) and value and not _looks_like_glb_url(value):
+            return value
+
+    outputs = data.get("outputs") or data.get("output")
+    if isinstance(outputs, str) and outputs and not _looks_like_glb_url(outputs):
+        return outputs
+    if isinstance(outputs, dict):
+        for key in (
+            "generated_image",
+            "image",
+            "rendered_image",
+            "result_image",
+            "tpose_image",
+            "png",
+            "file",
+            "url",
+        ):
+            value = outputs.get(key)
+            if isinstance(value, str) and value and not _looks_like_glb_url(value):
+                return value
+    if isinstance(outputs, list):
+        for item in outputs:
+            if isinstance(item, str) and item:
+                return item
+            if isinstance(item, dict):
+                value = _first_tpose_output_url(item)
+                if value:
+                    return value
+    return ""
+
+
 def _first_character_output_url(data) -> str:
     """Accept a few backend response shapes while the character API stabilizes."""
     if not isinstance(data, dict):
@@ -1209,6 +1283,32 @@ def _download_video_output(gen_id, dest, *, api_key, api_base, video_profile="pr
         if result:
             return result
     return ""
+
+
+def _render_sidecar_path(dance_path: str) -> str:
+    base = os.path.splitext(str(dance_path or ""))[0]
+    return f"{base}.mvnt_render.json" if base else ""
+
+
+def _write_render_sidecar(dance_path: str, payload: dict):
+    sidecar = _render_sidecar_path(dance_path)
+    if not sidecar:
+        return
+    with open(sidecar, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _read_render_sidecar(dance_path: str) -> dict:
+    sidecar = _render_sidecar_path(dance_path)
+    if not sidecar or not os.path.exists(sidecar):
+        return {}
+    try:
+        with open(sidecar, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        print(f"[MVNT Render Dance Video] failed to read sidecar {sidecar}: {exc}")
+        return {}
 
 
 def _download_motion_output(gen_id, dest, *, api_key, api_base, output_format):

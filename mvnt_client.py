@@ -518,6 +518,127 @@ def retarget_tripo_glb(
     return dest_path
 
 
+def prepare_internal_render_scene(
+    job_id: str,
+    *,
+    render_profile: str = "pretty",
+    preset: str = "standard",
+    character_glb_path: str | None = None,
+    audio_path: str | None = None,
+    api_base: str | None = None,
+    timeout: float = 180,
+) -> dict:
+    """Create an internal mS-readable render scene for a generated dance job."""
+    base = (
+        api_base
+        or os.environ.get("MVNT_INTERNAL_RENDER_API_BASE")
+        or "https://api.mvnt.studio/dev-api"
+    ).rstrip("/")
+    data = {
+        "job_id": job_id,
+        "render_profile": render_profile,
+        "preset": preset,
+    }
+    files = None
+    character_file = None
+    audio_file = None
+    try:
+        files = {}
+        if character_glb_path and os.path.exists(character_glb_path):
+            character_file = open(character_glb_path, "rb")
+            files["character_glb"] = (
+                os.path.basename(character_glb_path),
+                character_file,
+                "model/gltf-binary",
+            )
+        if audio_path and os.path.exists(audio_path):
+            audio_file = open(audio_path, "rb")
+            files["audio_file"] = (
+                os.path.basename(audio_path),
+                audio_file,
+                mimetypes.guess_type(audio_path)[0] or "audio/wav",
+            )
+        if not files:
+            files = None
+        resp = requests.post(
+            f"{base}/internal/comfy/render-scene",
+            headers={"User-Agent": _USER_AGENT},
+            data=data,
+            files=files,
+            timeout=(10, timeout),
+        )
+    finally:
+        if character_file:
+            character_file.close()
+        if audio_file:
+            audio_file.close()
+    _raise_for_error(resp)
+    return resp.json()
+
+
+def render_internal_scene_video(
+    job_id: str,
+    dest_path: str,
+    *,
+    render_profile: str = "pretty",
+    preset: str = "standard",
+    character_glb_path: str | None = None,
+    audio_path: str | None = None,
+    api_base: str | None = None,
+    timeout: float = 420,
+) -> tuple[str, dict]:
+    """Prepare and render an internal mS preview scene, saving MP4 when available."""
+    base = (
+        api_base
+        or os.environ.get("MVNT_INTERNAL_RENDER_API_BASE")
+        or "https://api.mvnt.studio/dev-api"
+    ).rstrip("/")
+    data = {
+        "job_id": job_id,
+        "render_profile": render_profile,
+        "preset": preset,
+    }
+    files = {}
+    handles = []
+    try:
+        if character_glb_path and os.path.exists(character_glb_path):
+            fh = open(character_glb_path, "rb")
+            handles.append(fh)
+            files["character_glb"] = (os.path.basename(character_glb_path), fh, "model/gltf-binary")
+        if audio_path and os.path.exists(audio_path):
+            fh = open(audio_path, "rb")
+            handles.append(fh)
+            files["audio_file"] = (
+                os.path.basename(audio_path),
+                fh,
+                mimetypes.guess_type(audio_path)[0] or "audio/wav",
+            )
+        resp = requests.post(
+            f"{base}/internal/comfy/render-scene",
+            headers={"User-Agent": _USER_AGENT},
+            data=data,
+            files=files or None,
+            timeout=(10, timeout),
+        )
+    finally:
+        for fh in handles:
+            fh.close()
+
+    _raise_for_error(resp)
+    content_type = resp.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type == "video/mp4":
+        with open(dest_path, "wb") as f:
+            f.write(resp.content)
+        if not _is_mp4_file(dest_path):
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            raise RuntimeError(f"Internal render returned an invalid MP4 file: {dest_path}")
+        return dest_path, {"ok": True, "content_type": content_type}
+    return "", resp.json()
+
+
 def _download_legacy_hard_yaw_glb(job_id: str, dest_path: str, headers: dict, *, allow_missing: bool = False) -> str:
     """Build GLB from the hard_yaw_lock BVH because /download-glb-lda currently exports baseline BVH."""
     base = _legacy_base_url()
