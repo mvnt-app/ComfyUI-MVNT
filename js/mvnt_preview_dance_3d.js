@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 
 const NODE = "MVNTPreviewDance3D";
-const SERVICE_MODULES = ["/assets/load3dService-Bgd80_fq.js", "/assets/load3dService-B9rS34_t.js"];
+const STATIC_SERVICE_MODULES = ["/assets/load3dService-Bgd80_fq.js", "/assets/load3dService-B9rS34_t.js"];
 const VIEW_H = 420;
 const BAR_H = 42;
 const TRACK_YAW_LERP = 0.055;
@@ -27,16 +27,153 @@ const COMPONENT_READERS = {
   5126: "getFloat32",
 };
 
-async function importFirst(files) {
-  let lastError;
-  for (const file of files) {
-    try { return await import(file); } catch (error) { lastError = error; }
+function normalizePath(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value), window.location.origin);
+    return `${url.pathname}${url.search || ""}`;
+  } catch {
+    return String(value);
   }
-  throw lastError || new Error("No module candidates");
+}
+
+function collectRuntimeModuleCandidates() {
+  const seen = new Set();
+  const candidates = [];
+  const push = (value) => {
+    const path = normalizePath(value);
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    candidates.push(path);
+  };
+
+  for (const path of STATIC_SERVICE_MODULES) push(path);
+
+  // Discover currently active hashed bundles from loaded script/link/resource URLs.
+  const sources = [];
+  for (const script of document.querySelectorAll("script[src]")) sources.push(script.src);
+  for (const link of document.querySelectorAll("link[href]")) sources.push(link.href);
+  if (typeof performance !== "undefined" && performance.getEntriesByType) {
+    for (const entry of performance.getEntriesByType("resource")) {
+      if (entry?.name) sources.push(entry.name);
+    }
+  }
+  const assetRegex = /(\/assets\/(?:load3dService|load3d|Load3D|useLoad3d)[^"'\s]*\.js(?:\?[^"'\s]*)?)/i;
+  for (const source of sources) {
+    const hit = String(source || "").match(assetRegex);
+    if (hit?.[1]) push(hit[1]);
+  }
+
+  return candidates;
+}
+
+function extractLoad3dClass(mod) {
+  if (!mod) return null;
+  return mod.n || mod.Load3d || mod.Load3D || mod.default || null;
+}
+
+async function tryImportLoad3d(paths) {
+  let lastError = null;
+  const tried = [];
+  for (const path of paths) {
+    tried.push(path);
+    try {
+      const mod = await import(path);
+      const klass = extractLoad3dClass(mod);
+      if (klass) return klass;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const summary = tried.length ? tried.join(", ") : "(none)";
+  const detail = lastError ? ` Last error: ${lastError}` : "";
+  throw new Error(`Could not resolve Load3d module. Tried: ${summary}.${detail}`);
+}
+
+function collectManifestCandidates() {
+  const seen = new Set();
+  const out = [];
+  const push = (value) => {
+    const path = normalizePath(value);
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    out.push(path);
+  };
+  const manifestRegex = /(\/assets\/manifest-[^"'\s]+\.json(?:\?[^"'\s]*)?)/i;
+  const sources = [];
+  for (const script of document.querySelectorAll("script[src]")) sources.push(script.src);
+  for (const link of document.querySelectorAll("link[href]")) sources.push(link.href);
+  if (typeof performance !== "undefined" && performance.getEntriesByType) {
+    for (const entry of performance.getEntriesByType("resource")) {
+      if (entry?.name) sources.push(entry.name);
+    }
+  }
+  for (const source of sources) {
+    const hit = String(source || "").match(manifestRegex);
+    if (hit?.[1]) push(hit[1]);
+  }
+  return out;
+}
+
+function flattenManifestValues(value, out) {
+  if (!value) return;
+  if (typeof value === "string") {
+    out.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) flattenManifestValues(item, out);
+    return;
+  }
+  if (typeof value === "object") {
+    for (const item of Object.values(value)) flattenManifestValues(item, out);
+  }
+}
+
+async function collectManifestModuleCandidates() {
+  const manifests = collectManifestCandidates();
+  if (!manifests.length) return [];
+
+  const seen = new Set();
+  const out = [];
+  const push = (value) => {
+    const path = normalizePath(value);
+    if (!path || seen.has(path)) return;
+    if (!/\/assets\/(?:load3dService|load3d|Load3D|useLoad3d)[^"'\s]*\.js(?:\?[^"'\s]*)?$/i.test(path)) return;
+    seen.add(path);
+    out.push(path);
+  };
+
+  for (const manifestPath of manifests) {
+    try {
+      const resp = await fetch(manifestPath, { cache: "no-store" });
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const values = [];
+      flattenManifestValues(data, values);
+      for (const value of values) push(value);
+    } catch {
+      // Ignore manifest parsing errors; runtime candidates are still available.
+    }
+  }
+  return out;
+}
+
+async function resolveLoad3dClass() {
+  const runtimeCandidates = collectRuntimeModuleCandidates();
+  try {
+    return await tryImportLoad3d(runtimeCandidates);
+  } catch (runtimeErr) {
+    const manifestCandidates = await collectManifestModuleCandidates();
+    if (manifestCandidates.length) {
+      return await tryImportLoad3d([...runtimeCandidates, ...manifestCandidates]);
+    }
+    throw runtimeErr;
+  }
 }
 
 function getLoad3dClass() {
-  load3dPromise ||= importFirst(SERVICE_MODULES).then((m) => m.n || m.Load3d || m.default);
+  load3dPromise ||= resolveLoad3dClass();
   return load3dPromise;
 }
 
