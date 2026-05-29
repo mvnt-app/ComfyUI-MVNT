@@ -14,6 +14,7 @@ const PREVIEW_TARGET_FACTOR = 0.82;
 const TRACK_SCREEN_Y_FACTOR = 0.34;
 const TRACK_TURN_IGNORE_RAD = (100 * Math.PI) / 180;
 const TRACK_SPIN_VEL_MAX = Math.PI * 1.5;
+const DEBUG = true;
 let load3dPromise = null;
 
 const COMPONENT_SIZE = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
@@ -26,6 +27,14 @@ const COMPONENT_READERS = {
   5125: "getUint32",
   5126: "getFloat32",
 };
+
+function dbg(...args) {
+  if (DEBUG) console.info("[MVNT Preview Dance 3D][dbg]", ...args);
+}
+
+function dbgw(...args) {
+  if (DEBUG) console.warn("[MVNT Preview Dance 3D][dbg]", ...args);
+}
 
 function normalizePath(value) {
   if (!value) return "";
@@ -64,12 +73,29 @@ function collectRuntimeModuleCandidates() {
     if (hit?.[1]) push(hit[1]);
   }
 
+  dbg("runtime module candidates", candidates);
   return candidates;
 }
 
 function extractLoad3dClass(mod) {
   if (!mod) return null;
-  return mod.n || mod.Load3d || mod.Load3D || mod.default || null;
+  const direct = mod.n || mod.Load3d || mod.Load3D || mod.default || null;
+  if (looksLikeLoad3dCtor(direct)) return direct;
+
+  // Some Comfy builds export minified symbols with different names.
+  for (const value of Object.values(mod)) {
+    if (looksLikeLoad3dCtor(value)) return value;
+  }
+  return null;
+}
+
+function looksLikeLoad3dCtor(value) {
+  if (typeof value !== "function" || !value.prototype) return false;
+  const proto = value.prototype;
+  const hasLoad = typeof proto.loadModel === "function";
+  const hasDispose = typeof proto.dispose === "function";
+  const hasAnimTime = typeof proto.getAnimationTime === "function" || typeof proto.getAnimationDuration === "function";
+  return hasLoad && (hasDispose || hasAnimTime);
 }
 
 async function tryImportLoad3d(paths) {
@@ -78,11 +104,21 @@ async function tryImportLoad3d(paths) {
   for (const path of paths) {
     tried.push(path);
     try {
+      dbg("trying dynamic import", path);
       const mod = await import(path);
       const klass = extractLoad3dClass(mod);
-      if (klass) return klass;
+      if (klass) {
+        dbg("resolved Load3d from", path, {
+          exports: Object.keys(mod || {}).slice(0, 20),
+        });
+        return klass;
+      }
+      dbgw("module imported but Load3d class not found", path, {
+        exports: Object.keys(mod || {}).slice(0, 20),
+      });
     } catch (error) {
       lastError = error;
+      dbgw("dynamic import failed", path, error);
     }
   }
   const summary = tried.length ? tried.join(", ") : "(none)";
@@ -112,6 +148,7 @@ function collectManifestCandidates() {
     const hit = String(source || "").match(manifestRegex);
     if (hit?.[1]) push(hit[1]);
   }
+  dbg("manifest candidates", out);
   return out;
 }
 
@@ -146,6 +183,7 @@ async function collectManifestModuleCandidates() {
 
   for (const manifestPath of manifests) {
     try {
+      dbg("fetching manifest", manifestPath);
       const resp = await fetch(manifestPath, { cache: "no-store" });
       if (!resp.ok) continue;
       const data = await resp.json();
@@ -154,8 +192,10 @@ async function collectManifestModuleCandidates() {
       for (const value of values) push(value);
     } catch {
       // Ignore manifest parsing errors; runtime candidates are still available.
+      dbgw("manifest parse failed", manifestPath);
     }
   }
+  dbg("manifest module candidates", out);
   return out;
 }
 
@@ -164,10 +204,12 @@ async function resolveLoad3dClass() {
   try {
     return await tryImportLoad3d(runtimeCandidates);
   } catch (runtimeErr) {
+    dbgw("runtime candidates failed; trying manifest fallback", runtimeErr);
     const manifestCandidates = await collectManifestModuleCandidates();
     if (manifestCandidates.length) {
       return await tryImportLoad3d([...runtimeCandidates, ...manifestCandidates]);
     }
+    dbgw("no manifest candidates available");
     throw runtimeErr;
   }
 }
@@ -175,6 +217,37 @@ async function resolveLoad3dClass() {
 function getLoad3dClass() {
   load3dPromise ||= resolveLoad3dClass();
   return load3dPromise;
+}
+
+function showPreviewError(state, error) {
+  const text = String(error?.message || error || "Unknown preview error");
+  console.error("[MVNT Preview Dance 3D] mount failed", error);
+  if (state?.viewer) {
+    state.viewer.innerHTML = "";
+    const box = document.createElement("div");
+    box.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;background:#111;color:#ffd5d5;font-size:12px;text-align:left;white-space:pre-wrap;";
+    box.textContent = `[MVNT Preview Dance 3D]\n${text}`;
+    state.viewer.appendChild(box);
+  }
+  if (state?.label) {
+    state.label.textContent = "Preview error";
+    state.label.title = text;
+  }
+}
+
+async function safeMount(node, payload) {
+  const state = ensureDom(node);
+  dbg("safeMount", {
+    nodeId: node?.id,
+    nodeTitle: node?.title,
+    hasPayload: !!payload,
+    payloadModel: payload?.model_file || "",
+  });
+  try {
+    await mount(node, payload);
+  } catch (error) {
+    showPreviewError(state, error);
+  }
 }
 
 function viewUrl(value, fallbackType = "output") {
@@ -211,16 +284,19 @@ function widgetText(node, name) {
 
 function payloadFromWidgets(node) {
   const model = widgetText(node, "model_file");
+  dbg("payloadFromWidgets", { nodeId: node?.id, model });
   return model ? { model_file: model, audio: [] } : null;
 }
 
 function payloadFromStored(node) {
   const payload = node.properties?.mvnt_preview_payload;
+  dbg("payloadFromStored", { nodeId: node?.id, hasStored: !!payload?.model_file });
   return payload?.model_file ? payload : null;
 }
 
 function payloadFromExecution(message) {
   const payload = message?.mvnt_preview;
+  dbg("payloadFromExecution", { hasPayload: !!payload });
   return Array.isArray(payload) ? payload[0] || null : payload || null;
 }
 
@@ -729,7 +805,11 @@ function startSyncLoop(state) {
 async function mount(node, payload) {
   const state = ensureDom(node);
   const modelUrl = viewUrl(payload?.model_file, "output");
-  console.info("[MVNT Preview Dance 3D] mount", { payload, modelUrl });
+  dbg("mount start", {
+    nodeId: node?.id,
+    modelUrl,
+    payload,
+  });
   node.properties ||= {};
   node.properties.mvnt_preview_payload = payload;
   const audioPayload = payload?.audio;
@@ -740,11 +820,13 @@ async function mount(node, payload) {
 
   state.model = modelUrl;
   const Load3d = await getLoad3dClass();
+  dbg("Load3d resolved", { ctorName: Load3d?.name || "(anonymous)" });
   stopSyncLoop(state);
   state.viewer3d?.dispose?.();
   state.viewer.innerHTML = "";
   state.viewer3d = new Load3d(state.viewer, { width: 800, height: 600, isViewerMode: true });
   await state.viewer3d.loadModel(modelUrl);
+  dbg("model loaded", { modelUrl });
   state.viewer3d.updateStatusMouseOnViewer?.(true);
   state.rootMotionTrack = await loadRootMotionTrack(modelUrl);
   state.trackingBone = findTrackingBone(state.viewer3d.modelManager?.currentModel);
@@ -770,7 +852,7 @@ app.registerExtension({
       ensureDom(this);
       setTimeout(() => {
         const payload = payloadFromWidgets(this) || payloadFromStored(this);
-        if (payload) mount(this, payload);
+        if (payload) safeMount(this, payload);
       }, 300);
     };
 
@@ -778,7 +860,7 @@ app.registerExtension({
     nodeType.prototype.onExecuted = function (message) {
       executed?.apply(this, arguments);
       const payload = payloadFromExecution(message);
-      if (payload) mount(this, payload);
+      if (payload) safeMount(this, payload);
     };
 
     const configured = nodeType.prototype.onConfigure;
@@ -786,7 +868,7 @@ app.registerExtension({
       const result = configured?.apply(this, arguments);
       setTimeout(() => {
         const payload = payloadFromWidgets(this) || payloadFromStored(this);
-        if (payload) mount(this, payload);
+        if (payload) safeMount(this, payload);
       }, 300);
       return result;
     };
