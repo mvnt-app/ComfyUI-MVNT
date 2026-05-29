@@ -523,6 +523,7 @@ def prepare_internal_render_scene(
     *,
     render_profile: str = "pretty",
     preset: str = "standard",
+    source_animated_glb_path: str | None = None,
     character_glb_path: str | None = None,
     audio_path: str | None = None,
     api_base: str | None = None,
@@ -532,7 +533,7 @@ def prepare_internal_render_scene(
     base = (
         api_base
         or os.environ.get("MVNT_INTERNAL_RENDER_API_BASE")
-        or "https://api.mvnt.studio/dev-api"
+        or "https://api.mvnt.studio"
     ).rstrip("/")
     data = {
         "job_id": job_id,
@@ -540,10 +541,18 @@ def prepare_internal_render_scene(
         "preset": preset,
     }
     files = None
+    source_file = None
     character_file = None
     audio_file = None
     try:
         files = {}
+        if source_animated_glb_path and os.path.exists(source_animated_glb_path):
+            source_file = open(source_animated_glb_path, "rb")
+            files["source_animated_glb"] = (
+                os.path.basename(source_animated_glb_path),
+                source_file,
+                "model/gltf-binary",
+            )
         if character_glb_path and os.path.exists(character_glb_path):
             character_file = open(character_glb_path, "rb")
             files["character_glb"] = (
@@ -568,6 +577,8 @@ def prepare_internal_render_scene(
             timeout=(10, timeout),
         )
     finally:
+        if source_file:
+            source_file.close()
         if character_file:
             character_file.close()
         if audio_file:
@@ -582,6 +593,7 @@ def render_internal_scene_video(
     *,
     render_profile: str = "pretty",
     preset: str = "standard",
+    source_animated_glb_path: str | None = None,
     character_glb_path: str | None = None,
     audio_path: str | None = None,
     api_base: str | None = None,
@@ -591,7 +603,7 @@ def render_internal_scene_video(
     base = (
         api_base
         or os.environ.get("MVNT_INTERNAL_RENDER_API_BASE")
-        or "https://api.mvnt.studio/dev-api"
+        or "https://api.mvnt.studio"
     ).rstrip("/")
     data = {
         "job_id": job_id,
@@ -601,6 +613,14 @@ def render_internal_scene_video(
     files = {}
     handles = []
     try:
+        if source_animated_glb_path and os.path.exists(source_animated_glb_path):
+            fh = open(source_animated_glb_path, "rb")
+            handles.append(fh)
+            files["source_animated_glb"] = (
+                os.path.basename(source_animated_glb_path),
+                fh,
+                "model/gltf-binary",
+            )
         if character_glb_path and os.path.exists(character_glb_path):
             fh = open(character_glb_path, "rb")
             handles.append(fh)

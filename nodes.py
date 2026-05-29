@@ -443,19 +443,62 @@ class MVNTRenderDanceVideo:
         progress = _progress_bar()
         _set_progress(progress, 5)
         out_dir = folder_paths.get_output_directory()
-        dest = os.path.join(out_dir, f"mvnt_{jid}.dance.fetch.mp4")
-        path = _download_video_output(
-            jid,
-            dest,
-            api_key=None,
-            api_base=None,
-            video_profile=_mvnt_video_profile_token(video_profile),
-        )
+        profile_token = _mvnt_video_profile_token(video_profile)
+        sidecar = _read_render_sidecar(dance_path) if dance_path else {}
+        path = ""
+        internal_error = None
+
+        # Prefer rendering from the actual dance_3d GLB so retargeted characters appear in MP4.
+        if dance_path and os.path.isfile(dance_path):
+            _set_progress(progress, 20)
+            internal_dest = os.path.join(out_dir, f"mvnt_{jid}.dance.internal.mp4")
+            try:
+                character_glb = _coerce_optional_file_path(sidecar.get("character_glb", ""))
+                audio_file = _coerce_optional_file_path(sidecar.get("audio", ""))
+                path, meta = mvnt_client.render_internal_scene_video(
+                    jid,
+                    internal_dest,
+                    render_profile=profile_token,
+                    source_animated_glb_path=dance_path,
+                    character_glb_path=character_glb or None,
+                    audio_path=audio_file or None,
+                    api_base=None,
+                )
+                if path and os.path.isfile(path):
+                    print(
+                        f"[MVNT Render Dance Video] internal render success "
+                        f"job_id={jid} profile={profile_token} source={dance_path}"
+                    )
+                else:
+                    print(
+                        f"[MVNT Render Dance Video] internal render returned no mp4 "
+                        f"job_id={jid} profile={profile_token} meta={meta}"
+                    )
+            except Exception as exc:
+                internal_error = exc
+                print(f"[MVNT Render Dance Video] internal render failed for {jid}: {exc}")
+
+        if not path:
+            _set_progress(progress, 55)
+            dest = os.path.join(out_dir, f"mvnt_{jid}.dance.fetch.mp4")
+            path = _download_video_output(
+                jid,
+                dest,
+                api_key=None,
+                api_base=None,
+                video_profile=profile_token,
+            )
         _set_progress(progress, 95)
         if not path or not os.path.isfile(path):
+            hint = (
+                f" Internal render upload also failed: {internal_error}"
+                if internal_error
+                else " Internal render upload returned no MP4."
+            )
             raise RuntimeError(
                 "MVNT did not return an MP4 for this job_id. "
                 "Confirm the job finished and /render-mp4-lda (or v1 render output) is reachable."
+                + hint
             )
         _set_progress(progress, 100)
         return (InputImpl.VideoFromFile(path),)
