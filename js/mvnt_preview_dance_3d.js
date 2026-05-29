@@ -36,6 +36,39 @@ function dbgw(...args) {
   if (DEBUG) console.warn("[MVNT Preview Dance 3D][dbg]", ...args);
 }
 
+function hardRefreshViewer(state, reason = "manual") {
+  if (!state?.viewer3d) {
+    dbgw("hardRefreshViewer skipped (no viewer3d)", { reason });
+    return;
+  }
+  try {
+    const width = Math.max(64, state.viewer?.clientWidth || state.root?.clientWidth || 800);
+    const height = Math.max(64, state.viewer?.clientHeight || VIEW_H);
+    state.viewer3d.renderer?.setSize?.(width, height, false);
+    state.viewer3d.refreshViewport?.();
+    state.viewer3d.forceRender?.();
+    state.viewer3d.updateStatusMouseOnViewer?.(state.viewerHover || false);
+    dbgw("hardRefreshViewer applied", { reason, width, height });
+  } catch (error) {
+    dbgw("hardRefreshViewer failed", { reason, error });
+  }
+}
+
+function resumeAfterVisibility(state, reason) {
+  if (!state?.viewer3d) return;
+  dbgw("resumeAfterVisibility", {
+    reason,
+    playing: state.playing,
+    hidden: typeof document !== "undefined" ? document.hidden : false,
+  });
+  hardRefreshViewer(state, reason);
+  if (!state.animationFrameId) startSyncLoop(state);
+  if (state.playing && state.audio?.src && state.audio?.paused) {
+    state.audio.play().catch((error) => dbgw("audio resume failed", { reason, error }));
+  }
+  updateBar(state);
+}
+
 function normalizePath(value) {
   if (!value) return "";
   try {
@@ -429,6 +462,7 @@ function ensureDom(node) {
     smoothYaw: 0, smoothX: 0, smoothZ: 0, prevFaceYaw: 0, prevTrackingTime: -1,
     trackDistance: 0, trackTargetY: 0, trackCameraY: 0, trackTargetYOffset: 0, trackCameraYOffset: 0,
     trackBaseBoneX: 0, trackBaseBoneZ: 0, trackBaseTargetX: 0, trackBaseTargetZ: 0, trackBaseCameraX: 0, trackBaseCameraZ: 0,
+    visibilityHandlersInstalled: false,
   };
   const enterViewer = () => { state.viewerHover = true; state.viewer3d?.updateStatusMouseOnViewer?.(true); };
   const leaveViewer = () => { state.viewerHover = false; state.viewer3d?.updateStatusMouseOnViewer?.(false); };
@@ -446,6 +480,14 @@ function ensureDom(node) {
     }
   });
   updateTrackingButton(state);
+  if (!state.visibilityHandlersInstalled) {
+    state.visibilityHandlersInstalled = true;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) resumeAfterVisibility(state, "visibilitychange");
+    });
+    window.addEventListener("focus", () => resumeAfterVisibility(state, "window-focus"));
+    window.addEventListener("pageshow", () => resumeAfterVisibility(state, "pageshow"));
+  }
   node.__mvntPreview = state;
   node.size = [Math.max(node.size?.[0] || 680, 680), Math.max(node.size?.[1] || 620, 620)];
   return state;
