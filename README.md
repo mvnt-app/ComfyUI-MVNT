@@ -13,19 +13,9 @@ Optional character flows can prepare a T-pose image and connect a compatible rig
 
 ## Demo
 
-### MVNT + Kling AI - Motion Transfer
+https://github.com/user-attachments/assets/2fcde3de-5bd5-4fe6-8931-72198dee9ace
 
-https://github.com/user-attachments/assets/mvnt_kling_usecase.mp4
 
-Audio -> AI dance choreography -> photorealistic video via Kling motion transfer
-
-https://github.com/mvnt-app/ComfyUI-MVNT/releases/download/v1.1.0/mvnt_kling_usecase.mp4
-
-### MVNT Studio - AI Dance Generation
-
-https://github.com/mvnt-app/ComfyUI-MVNT/releases/download/v1.1.0/mS-demo-comp_480.mov
-
-K-pop quality dance from any music track in about 15 seconds.
 
 ## Nodes
 
