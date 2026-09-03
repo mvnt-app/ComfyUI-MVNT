@@ -151,6 +151,9 @@ audio + character image
 
 ## Troubleshooting
 
+**`api.mvnt.world` connection timeout**
+The live API is `https://api.mvnt.studio`. Unset `MVNT_API_BASE` if it still points at world, then restart ComfyUI.
+
 **Old MVNT nodes showing up (`MVNT Dance Generate`, `MVNT Dance (All-in-One)`)**
 Remove or rename the old custom node folder and restart ComfyUI.
 

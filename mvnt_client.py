@@ -6,12 +6,16 @@ import time
 import uuid
 import requests
 
-DEFAULT_BASE_URL = "https://api.mvnt.world/v1"
+# Live generation is api.mvnt.studio. api.mvnt.world/v1 currently times out / 404s.
+DEFAULT_BASE_URL = "https://api.mvnt.studio/v1"
 DEFAULT_LEGACY_BASE_URL = "https://api.mvnt.studio"
 DEFAULT_POLL_INTERVAL = 3
 DEFAULT_TIMEOUT = 600
+DEFAULT_CONNECT_TIMEOUT = 5
+# Live K-pop checkpoint is v16 (v16_boundary_fixed3s_epoch94).
+DEFAULT_MODEL_VERSION = "v16"
 
-_USER_AGENT = "comfyui-mvnt/1.2.0"
+_USER_AGENT = "comfyui-mvnt/1.1.1"
 _VALID_KEY_PREFIXES = ("mvnt_live_", "mvnt_test_", "mk_live_", "mk_test_")
 _GENERATION_BACKENDS: dict[str, str] = {}
 
@@ -163,7 +167,9 @@ def _is_mp4_file(path: str) -> bool:
         return False
 
 
-def _should_fallback_to_legacy(resp: requests.Response) -> bool:
+def _should_fallback_to_legacy(resp: requests.Response | None) -> bool:
+    if resp is None:
+        return True
     if resp.status_code != 404:
         return False
     body = _json_or_text(resp)
@@ -235,31 +241,36 @@ def create_generation(
     base = _base_url(api_base)
 
     character_file = _open_optional_file(character_path)
+    resp = None
     try:
         with open(audio_path, "rb") as audio_file:
             files = {"audio": audio_file}
             if character_file:
                 files["character"] = character_file
-            resp = requests.post(
-                f"{base}/generations",
-                headers=_headers(key, idempotency_key=idempotency_key or make_idempotency_key()),
-                files=files,
-                data={
-                    "style": style,
-                    "output_format": output_format,
-                    "output_mode": output_mode,
-                    "preview_style": preview_style,
-                    "seed": seed,
-                    "guidance": guidance,
-                    "temperature": temperature,
-                    "trim_start": trim_start,
-                    "trim_end": trim_end,
-                    "mode": mode,
-                    "save_hard_yaw_lock_variant": str(bool(save_hard_yaw_lock_variant)).lower(),
-                    **({"n_steps": n_steps} if n_steps else {}),
-                },
-                timeout=60,
-            )
+            try:
+                resp = requests.post(
+                    f"{base}/generations",
+                    headers=_headers(key, idempotency_key=idempotency_key or make_idempotency_key()),
+                    files=files,
+                    data={
+                        "model_version": DEFAULT_MODEL_VERSION,
+                        "style": style,
+                        "output_format": output_format,
+                        "output_mode": output_mode,
+                        "preview_style": preview_style,
+                        "seed": seed,
+                        "guidance": guidance,
+                        "temperature": temperature,
+                        "trim_start": trim_start,
+                        "trim_end": trim_end,
+                        "mode": mode,
+                        "save_hard_yaw_lock_variant": str(bool(save_hard_yaw_lock_variant)).lower(),
+                        **({"n_steps": n_steps} if n_steps else {}),
+                    },
+                    timeout=(DEFAULT_CONNECT_TIMEOUT, 60),
+                )
+            except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
+                resp = None
     finally:
         if character_file:
             character_file.close()
@@ -312,7 +323,7 @@ def create_legacy_generation(
             if character_file:
                 files["character"] = character_file
             data = {
-                "model_version": "v11_gender",
+                "model_version": DEFAULT_MODEL_VERSION,
                 "style": style,
                 "seed": str(seed),
                 "guidance": str(guidance),
@@ -332,7 +343,7 @@ def create_legacy_generation(
                 headers=headers,
                 files=files,
                 data=data,
-                timeout=60,
+                timeout=(DEFAULT_CONNECT_TIMEOUT, 60),
             )
     finally:
         if character_file:

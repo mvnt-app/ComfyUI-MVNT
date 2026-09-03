@@ -6,8 +6,9 @@
 
 `mvnt_client.py` 기준 기본값은 다음과 같습니다.
 
-- 새 API 기본값: `https://api.mvnt.world/v1`
-- 현재 legacy/live fallback 기본값: `https://api.mvnt.studio`
+- 새 API 기본값: `https://api.mvnt.studio/v1`
+- live fallback: `https://api.mvnt.studio` (`/generate-motion-lda`)
+- `api.mvnt.world` 는 현재 timeout/404라 기본값으로 쓰지 않는다.
 - retarget 기본값: `MVNT_RETARGET_API_BASE`가 없으면 legacy/live base를 사용
 - Tripo 기본값: `TRIPO_API_BASE`가 없으면 Tripo API base 사용
 
