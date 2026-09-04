@@ -1,9 +1,16 @@
 """Lightweight wrapper around the MVNT API used by the ComfyUI nodes."""
 
+import json
 import mimetypes
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import time
 import uuid
+from urllib.parse import urlencode
+
 import requests
 
 # Live generation is api.mvnt.studio. api.mvnt.world/v1 currently times out / 404s.
@@ -11,11 +18,11 @@ DEFAULT_BASE_URL = "https://api.mvnt.studio/v1"
 DEFAULT_LEGACY_BASE_URL = "https://api.mvnt.studio"
 DEFAULT_POLL_INTERVAL = 3
 DEFAULT_TIMEOUT = 600
-DEFAULT_CONNECT_TIMEOUT = 5
+DEFAULT_CONNECT_TIMEOUT = 20
 # Live K-pop checkpoint is v16 (v16_boundary_fixed3s_epoch94).
 DEFAULT_MODEL_VERSION = "v16"
 
-_USER_AGENT = "comfyui-mvnt/1.1.1"
+_USER_AGENT = "comfyui-mvnt/1.1.2"
 _VALID_KEY_PREFIXES = ("mvnt_live_", "mvnt_test_", "mk_live_", "mk_test_")
 _GENERATION_BACKENDS: dict[str, str] = {}
 
@@ -26,6 +33,174 @@ def _base_url(api_base: str | None = None) -> str:
 
 def _legacy_base_url() -> str:
     return (os.environ.get("MVNT_LEGACY_API_BASE") or DEFAULT_LEGACY_BASE_URL).rstrip("/")
+
+
+def _is_local_network_block(exc: BaseException) -> bool:
+    text = str(exc)
+    return "10013" in text or "WinError 10013" in text or "WSAEACCES" in text
+
+
+def _raise_connect_error(exc: BaseException, url: str) -> None:
+    python_path = sys.executable
+    if _is_local_network_block(exc):
+        raise RuntimeError(
+            "Windows/antivirus blocked ComfyUI Python from opening HTTPS "
+            f"(WinError 10013). Allow this file in Avast/Windows Firewall, "
+            f"then restart ComfyUI: {python_path}"
+        ) from exc
+    raise RuntimeError(
+        f"Could not connect to {url}. "
+        "This PC blocked ComfyUI Python even though the MVNT server is up. "
+        f"Allow this file in Avast/Windows Firewall, then restart ComfyUI: {python_path}"
+    ) from exc
+
+
+class _RawResponse:
+    def __init__(self, status_code: int, headers: dict, content: bytes):
+        self.status_code = int(status_code)
+        self.headers = headers
+        self.content = content
+        self.text = content.decode("utf-8", errors="replace")
+
+    def json(self):
+        return json.loads(self.text)
+
+
+def _split_timeout(timeout) -> tuple[int, int]:
+    if isinstance(timeout, (tuple, list)) and len(timeout) >= 2:
+        return int(timeout[0]), int(timeout[1])
+    value = int(timeout or DEFAULT_TIMEOUT)
+    return DEFAULT_CONNECT_TIMEOUT, value
+
+
+def _curl_bin() -> str | None:
+    return shutil.which("curl.exe") or shutil.which("curl")
+
+
+def _parse_curl_headers(header_text: str) -> dict:
+    headers = {}
+    for line in header_text.splitlines():
+        if ":" not in line or line.lower().startswith("http/"):
+            continue
+        key, value = line.split(":", 1)
+        headers[key.strip().lower()] = value.strip()
+    return headers
+
+
+def _request_via_curl(
+    method: str,
+    url: str,
+    *,
+    headers: dict | None = None,
+    timeout=None,
+    params: dict | None = None,
+    data: dict | None = None,
+    file_paths: dict | None = None,
+) -> _RawResponse | None:
+    curl = _curl_bin()
+    if not curl:
+        return None
+    if params:
+        url = url + ("&" if "?" in url else "?") + urlencode(params)
+    connect_timeout, read_timeout = _split_timeout(timeout)
+    with tempfile.TemporaryDirectory(prefix="mvnt_curl_") as tmp_dir:
+        header_path = os.path.join(tmp_dir, "headers.txt")
+        body_path = os.path.join(tmp_dir, "body.bin")
+        cmd = [
+            curl,
+            "-sS",
+            "--http1.1",
+            "-X",
+            method.upper(),
+            "--connect-timeout",
+            str(connect_timeout),
+            "--max-time",
+            str(read_timeout),
+            "-D",
+            header_path,
+            "-o",
+            body_path,
+            "-w",
+            "%{http_code}",
+        ]
+        for key, value in (headers or {}).items():
+            cmd += ["-H", f"{key}: {value}"]
+        if data or file_paths:
+            for key, value in (data or {}).items():
+                cmd += ["-F", f"{key}={value}"]
+            for key, path in (file_paths or {}).items():
+                cmd += ["-F", f"{key}=@{path}"]
+        cmd.append(url)
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=read_timeout + 15,
+            )
+        except Exception:
+            return None
+        try:
+            status_code = int((proc.stdout or "0").strip() or "0")
+        except ValueError:
+            return None
+        content = b""
+        if os.path.exists(body_path):
+            with open(body_path, "rb") as body_file:
+                content = body_file.read()
+        header_text = ""
+        if os.path.exists(header_path):
+            with open(header_path, "rb") as header_file:
+                header_text = header_file.read().decode("latin-1", errors="replace")
+        if proc.returncode != 0 and status_code <= 0:
+            return None
+        return _RawResponse(status_code, _parse_curl_headers(header_text), content)
+
+
+def _http(
+    method: str,
+    url: str,
+    *,
+    headers: dict | None = None,
+    timeout=None,
+    params: dict | None = None,
+    data: dict | None = None,
+    file_paths: dict | None = None,
+):
+    opened = []
+    try:
+        files = None
+        if file_paths:
+            files = {}
+            for key, path in file_paths.items():
+                handle = open(path, "rb")
+                opened.append(handle)
+                files[key] = handle
+        return requests.request(
+            method,
+            url,
+            headers=headers,
+            timeout=timeout,
+            params=params,
+            data=data,
+            files=files,
+        )
+    except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as exc:
+        curl_resp = _request_via_curl(
+            method,
+            url,
+            headers=headers,
+            timeout=timeout,
+            params=params,
+            data=data,
+            file_paths=file_paths,
+        )
+        if curl_resp is not None and curl_resp.status_code > 0:
+            return curl_resp
+        _raise_connect_error(exc, url)
+    finally:
+        for handle in opened:
+            handle.close()
 
 
 def _image_api_base_url(api_base: str | None = None) -> str:
@@ -167,7 +342,7 @@ def _is_mp4_file(path: str) -> bool:
         return False
 
 
-def _should_fallback_to_legacy(resp: requests.Response | None) -> bool:
+def _should_fallback_to_legacy(resp) -> bool:
     if resp is None:
         return True
     if resp.status_code != 404:
@@ -191,7 +366,12 @@ def _poll_until_done(
     last_error = None
     while time.time() < deadline:
         try:
-            resp = requests.get(url, headers=headers, timeout=(10, 45))
+            resp = _http(
+                "GET",
+                url,
+                headers=headers,
+                timeout=(10, 45),
+            )
         except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as exc:
             last_error = exc
             time.sleep(min(max(poll_interval, 3), 10))
@@ -239,41 +419,31 @@ def create_generation(
 ) -> dict:
     key = _get_api_key(api_key)
     base = _base_url(api_base)
-
-    character_file = _open_optional_file(character_path)
-    resp = None
-    try:
-        with open(audio_path, "rb") as audio_file:
-            files = {"audio": audio_file}
-            if character_file:
-                files["character"] = character_file
-            try:
-                resp = requests.post(
-                    f"{base}/generations",
-                    headers=_headers(key, idempotency_key=idempotency_key or make_idempotency_key()),
-                    files=files,
-                    data={
-                        "model_version": DEFAULT_MODEL_VERSION,
-                        "style": style,
-                        "output_format": output_format,
-                        "output_mode": output_mode,
-                        "preview_style": preview_style,
-                        "seed": seed,
-                        "guidance": guidance,
-                        "temperature": temperature,
-                        "trim_start": trim_start,
-                        "trim_end": trim_end,
-                        "mode": mode,
-                        "save_hard_yaw_lock_variant": str(bool(save_hard_yaw_lock_variant)).lower(),
-                        **({"n_steps": n_steps} if n_steps else {}),
-                    },
-                    timeout=(DEFAULT_CONNECT_TIMEOUT, 60),
-                )
-            except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
-                resp = None
-    finally:
-        if character_file:
-            character_file.close()
+    file_paths = {"audio": audio_path}
+    if character_path:
+        file_paths["character"] = character_path
+    resp = _http(
+        "POST",
+        f"{base}/generations",
+        headers=_headers(key, idempotency_key=idempotency_key or make_idempotency_key()),
+        data={
+            "model_version": DEFAULT_MODEL_VERSION,
+            "style": style,
+            "output_format": output_format,
+            "output_mode": output_mode,
+            "preview_style": preview_style,
+            "seed": seed,
+            "guidance": guidance,
+            "temperature": temperature,
+            "trim_start": trim_start,
+            "trim_end": trim_end,
+            "mode": mode,
+            "save_hard_yaw_lock_variant": str(bool(save_hard_yaw_lock_variant)).lower(),
+            **({"n_steps": n_steps} if n_steps else {}),
+        },
+        file_paths=file_paths,
+        timeout=(DEFAULT_CONNECT_TIMEOUT, 60),
+    )
     if _should_fallback_to_legacy(resp):
         return create_legacy_generation(
             audio_path,
@@ -316,38 +486,33 @@ def create_legacy_generation(
 ) -> dict:
     """Fallback for the current live API while /v1/generations is not deployed."""
     base = _legacy_base_url()
-    character_file = _open_optional_file(character_path)
-    try:
-        with open(audio_path, "rb") as audio_file:
-            files = {"file": audio_file}
-            if character_file:
-                files["character"] = character_file
-            data = {
-                "model_version": DEFAULT_MODEL_VERSION,
-                "style": style,
-                "seed": str(seed),
-                "guidance": str(guidance),
-                "temperature": str(temperature),
-                "trim_start": str(trim_start),
-                "trim_end": str(trim_end),
-                "mode": mode,
-                "save_hard_yaw_lock_variant": str(bool(save_hard_yaw_lock_variant)).lower(),
-            }
-            if n_steps:
-                data["n_steps"] = str(n_steps)
-            headers = {"User-Agent": _USER_AGENT}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-            resp = requests.post(
-                f"{base}/generate-motion-lda",
-                headers=headers,
-                files=files,
-                data=data,
-                timeout=(DEFAULT_CONNECT_TIMEOUT, 60),
-            )
-    finally:
-        if character_file:
-            character_file.close()
+    file_paths = {"file": audio_path}
+    if character_path:
+        file_paths["character"] = character_path
+    data = {
+        "model_version": DEFAULT_MODEL_VERSION,
+        "style": style,
+        "seed": str(seed),
+        "guidance": str(guidance),
+        "temperature": str(temperature),
+        "trim_start": str(trim_start),
+        "trim_end": str(trim_end),
+        "mode": mode,
+        "save_hard_yaw_lock_variant": str(bool(save_hard_yaw_lock_variant)).lower(),
+    }
+    if n_steps:
+        data["n_steps"] = str(n_steps)
+    headers = {"User-Agent": _USER_AGENT}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = _http(
+        "POST",
+        f"{base}/generate-motion-lda",
+        headers=headers,
+        data=data,
+        file_paths=file_paths,
+        timeout=(DEFAULT_CONNECT_TIMEOUT, 60),
+    )
 
     _raise_for_error(resp)
     body = resp.json()
@@ -445,7 +610,8 @@ def download_generation_output(
             query[name] = value
     request_timeout = 600 if (kind == "render" or format == "mp4") else 180
 
-    resp = requests.get(
+    resp = _http(
+        "GET",
         f"{_base_url(api_base)}/generations/{generation_id}/output",
         headers=_headers(key),
         params=query or None,
@@ -481,7 +647,7 @@ def download_file_url(url: str, dest_path: str, *, api_key: str | None = None) -
     if key:
         headers["Authorization"] = f"Bearer {key}"
 
-    resp = requests.get(url, headers=headers, timeout=180)
+    resp = _http("GET", url, headers=headers, timeout=180)
     _raise_for_error(resp)
     with open(dest_path, "wb") as f:
         f.write(resp.content)
@@ -673,7 +839,8 @@ def render_internal_scene_video(
 def _download_legacy_hard_yaw_glb(job_id: str, dest_path: str, headers: dict, *, allow_missing: bool = False) -> str:
     """Build GLB from the hard_yaw_lock BVH because /download-glb-lda currently exports baseline BVH."""
     base = _legacy_base_url()
-    bvh_resp = requests.get(
+    bvh_resp = _http(
+        "GET",
         f"{base}/download-bvh-lda/{job_id}",
         headers=headers,
         params={"variant": "hard_yaw_lock"},
@@ -737,7 +904,13 @@ def download_legacy_generation_output(
     else:
         url = f"{base}/download-bvh-lda/{job_id}"
 
-    resp = requests.get(url, headers=headers, params=params or None, timeout=request_timeout)
+    resp = _http(
+        "GET",
+        url,
+        headers=headers,
+        params=params or None,
+        timeout=request_timeout,
+    )
     if allow_missing and resp.status_code in {404, 409, 422, 500}:
         return ""
     _raise_for_error(resp)
