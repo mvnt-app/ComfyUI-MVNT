@@ -345,6 +345,10 @@ def _is_mp4_file(path: str) -> bool:
 def _should_fallback_to_legacy(resp) -> bool:
     if resp is None:
         return True
+    # /v1 is studio billing. Old Comfy keys are accepted on generate-motion-lda,
+    # so 401/403 here must not block the path that already worked.
+    if resp.status_code in {401, 403}:
+        return True
     if resp.status_code != 404:
         return False
     body = _json_or_text(resp)
