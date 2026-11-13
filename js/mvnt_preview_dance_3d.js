@@ -101,25 +101,47 @@ function widgetHostWidth(state) {
   return best;
 }
 
+/** Best available horizontal space for the DOM widget (Load3d often locks to first small measure). */
+function effectiveHostWidth(state, node) {
+  const nodeW = nodeInnerWidth(node);
+  const hostW = widgetHostWidth(state);
+  const slotW = state.root?.parentElement?.clientWidth || 0;
+  const rootW = state.root?.clientWidth || 0;
+  const viewerW = state.viewer?.clientWidth || 0;
+  return Math.max(320, nodeW, hostW, slotW, rootW, viewerW);
+}
+
 function capToHost(size, hostWidth) {
   if (!hostWidth || hostWidth <= 0) return size;
   return Math.max(64, Math.min(size, hostWidth));
 }
 
 function measureViewerSize(state, node, contentRect = null) {
-  const hostW = widgetHostWidth(state);
-  const ceiling = hostW > 0 ? hostW : nodeInnerWidth(node);
-  let width =
-    contentRect?.width > 0
-      ? contentRect.width
-      : state.viewer?.clientWidth || state.root?.clientWidth || ceiling;
-  let height =
-    contentRect?.height > 0
-      ? contentRect.height
-      : state.viewer?.clientHeight || VIEW_H;
+  const ceiling = effectiveHostWidth(state, node);
+  let width = ceiling;
+  if (contentRect?.width > 0) {
+    width = Math.max(contentRect.width, ceiling * 0.85);
+  } else if (state.viewer?.clientWidth > 32) {
+    // Ignore a narrow Load3d shell; prefer the node/slot width.
+    const vw = state.viewer.clientWidth;
+    width = vw >= ceiling * 0.75 ? vw : ceiling;
+  }
   width = Math.floor(capToHost(width, ceiling));
-  height = Math.max(64, Math.floor(height));
+  const height = VIEW_H;
   return { width, height, hostW: ceiling };
+}
+
+function applyViewerBoxSize(state, node, width, height) {
+  if (!state.viewer) return;
+  const w = Math.max(320, Math.floor(width));
+  const h = Math.max(200, Math.floor(height));
+  state.viewer.style.width = `${w}px`;
+  state.viewer.style.height = `${h}px`;
+  state.viewer.style.maxWidth = "100%";
+  state.viewer.style.maxHeight = `${VIEW_H}px`;
+  state.viewer.style.flex = "0 0 auto";
+  state.root.style.height = `${h + BAR_H}px`;
+  state.root.style.minHeight = `${h + BAR_H}px`;
 }
 
 function stretchDomWidgetAncestors(el) {
@@ -154,21 +176,27 @@ function clampLoad3dDom(viewer) {
 function syncWidgetLayout(node, state, reason = "layout", contentRect = null) {
   if (!state?.root) return;
   ensureLayoutStyles();
+  const { width, height, hostW } = measureViewerSize(state, node, contentRect);
   state.root.style.width = "100%";
   state.root.style.maxWidth = "100%";
   state.root.style.minWidth = "0";
   state.root.style.boxSizing = "border-box";
   state.root.style.overflow = "hidden";
-  state.viewer.style.width = "100%";
-  state.viewer.style.maxWidth = "100%";
-  state.viewer.style.flex = "1 1 auto";
-  state.viewer.style.minWidth = "0";
+  applyViewerBoxSize(state, node, width, height);
   state.viewer.style.overflow = "hidden";
   stretchDomWidgetAncestors(state.root);
   clampLoad3dDom(state.viewer);
   hardRefreshViewer(state, reason, contentRect);
-  const { width, hostW } = measureViewerSize(state, node, contentRect);
-  dbg("syncWidgetLayout", { reason, hostW, width, viewerW: state.viewer?.clientWidth });
+  if (Array.isArray(node.size)) {
+    const minW = Math.max(node.size[0] || 0, width + 20, 480);
+    const minH = Math.max(node.size[1] || 0, VIEW_H + BAR_H + 120);
+    if (node.size[0] < minW || node.size[1] < minH) {
+      node.size[0] = minW;
+      node.size[1] = minH;
+      node.setDirtyCanvas?.(true, true);
+    }
+  }
+  dbg("syncWidgetLayout", { reason, hostW, width, height, viewerW: state.viewer?.clientWidth });
 }
 
 function installLayoutObservers(node, state) {
@@ -763,7 +791,7 @@ function ensureDom(node) {
   if (widget) {
     widget.computeSize = function computeMvntPreviewSize(width) {
       const w = width > 0 ? width : nodeInnerWidth(node);
-      return [Math.max(320, w), VIEW_H + BAR_H];
+      return [Math.max(480, w), VIEW_H + BAR_H];
     };
   }
 
@@ -1187,9 +1215,16 @@ async function mount(node, payload) {
   state.viewer3d = null;
   state.viewer.innerHTML = "";
   syncWidgetLayout(node, state, "pre-mount");
-  await waitForLayoutFrames(2);
+  await waitForLayoutFrames(3);
   const { width, height } = measureViewerSize(state, node);
-  state.viewer3d = load3d.create(state.viewer, { width, height, isViewerMode: true });
+  applyViewerBoxSize(state, node, width, height);
+  await waitForLayoutFrames(1);
+  const { width: w2, height: h2 } = measureViewerSize(state, node);
+  state.viewer3d = load3d.create(state.viewer, {
+    width: w2,
+    height: h2,
+    isViewerMode: true,
+  });
   clampLoad3dDom(state.viewer);
   const loadResult = await state.viewer3d.loadModel(modelUrl);
   // Newer frontends resolve with a status string instead of throwing.
@@ -1210,6 +1245,8 @@ async function mount(node, payload) {
   startSyncLoop(state);
   updateBar(state);
   syncWidgetLayout(node, state, "post-mount");
+  requestAnimationFrame(() => syncWidgetLayout(node, state, "post-mount-raf"));
+  setTimeout(() => syncWidgetLayout(node, state, "post-mount-delay"), 400);
   node.setDirtyCanvas(true, true);
 }
 
