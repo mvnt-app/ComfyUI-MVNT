@@ -32,6 +32,30 @@ def _progress_bar(total=100):
     return ProgressBar(total)
 
 
+def _comfy_view_ref(abs_path):
+    """Return {filename, subfolder, type} for /view if the file lives under output/input/temp, else None."""
+    try:
+        target = os.path.normcase(os.path.abspath(abs_path))
+        for view_type, getter in (
+            ("output", folder_paths.get_output_directory),
+            ("input", folder_paths.get_input_directory),
+            ("temp", folder_paths.get_temp_directory),
+        ):
+            base = os.path.normcase(os.path.abspath(getter()))
+            if target == base or not target.startswith(base + os.sep):
+                continue
+            rel = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(getter()))
+            subfolder, filename = os.path.split(rel)
+            return {
+                "filename": filename,
+                "subfolder": subfolder.replace("\\", "/"),
+                "type": view_type,
+            }
+    except Exception:
+        return None
+    return None
+
+
 def _set_progress(progress, value):
     try:
         current = int(max(0, min(100, round(float(value)))))
@@ -482,12 +506,18 @@ class MVNTPreviewDance3D(MVNTPreviewBase):
         camera_info = kwargs.get("camera_info", None)
         bg_image = kwargs.get("bg_image", None)
         audio_ui = UI.PreviewAudio(audio, cls=cls).as_dict().get("audio", []) if audio is not None else []
+        model_abs_path = os.path.abspath(model_path)
         ui = {}
         ui.update(UI.PreviewUI3D(model_path, camera_info, bg_image=bg_image).as_dict())
         ui["mvnt_preview"] = [{
             "model_file": model_path,
+            "model_abs_path": model_abs_path,
+            "model_dir": os.path.dirname(model_abs_path),
+            "model_view": _comfy_view_ref(model_abs_path),
             "audio": audio_ui,
         }]
+        # Plain-text fallback so the GLB location is always visible even when the in-node 3D viewer cannot mount.
+        ui["text"] = [f"GLB: {model_abs_path}"]
         return IO.NodeOutput(ui=ui)
 
     process = execute

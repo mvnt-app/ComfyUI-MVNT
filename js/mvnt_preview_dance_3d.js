@@ -1,8 +1,8 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 
 const NODE = "MVNTPreviewDance3D";
-// Comfy frontend asset hashes change per release; never hard-code them. Candidates are discovered at runtime.
-const STATIC_SERVICE_MODULES = [];
+// Comfy frontend asset hashes change per release; never hard-code them. Names are discovered at runtime.
 const VIEW_H = 420;
 const BAR_H = 42;
 const TRACK_YAW_LERP = 0.055;
@@ -15,7 +15,14 @@ const PREVIEW_TARGET_FACTOR = 0.82;
 const TRACK_SCREEN_Y_FACTOR = 0.34;
 const TRACK_TURN_IGNORE_RAD = (100 * Math.PI) / 180;
 const TRACK_SPIN_VEL_MAX = Math.PI * 1.5;
-const DEBUG = true;
+// Verbose diagnostics: run localStorage.setItem("mvntPreviewDebug", "1") in the browser console to enable.
+const DEBUG = (() => {
+  try {
+    return localStorage.getItem("mvntPreviewDebug") === "1";
+  } catch {
+    return false;
+  }
+})();
 let load3dPromise = null;
 
 const COMPONENT_SIZE = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
@@ -80,43 +87,160 @@ function normalizePath(value) {
   }
 }
 
-function collectRuntimeModuleCandidates() {
-  const seen = new Set();
-  const candidates = [];
-  const push = (value) => {
-    const path = normalizePath(value);
-    if (!path || seen.has(path)) return;
-    seen.add(path);
-    candidates.push(path);
+// ---------------------------------------------------------------------------
+// Load3d discovery
+//
+// ComfyUI frontend chunks are hashed and their API changes between releases:
+//   * <= ~1.4x : `new Load3d(container, options)` exported from load3d*/useLoad3d* chunks.
+//   * ~1.59    : `Load3d` class is NOT exported any more. Chunk `createLoad3d-<hash>.js` exports the
+//                factory `createLoad3d(container, host, options)`, where `host` is the object exported
+//                by `load3dHost-<hash>.js` (also published as window.comfyAPI.load3dHost.load3dHost).
+// Neither chunk is guaranteed to be loaded (they are lazy: only after a Load3D/Preview3D node exists),
+// so we scan the JS assets the page already loaded for the real hashed file names.
+// ---------------------------------------------------------------------------
+
+const ASSET_NAME_RE = /(createLoad3d|load3dHost|load3dService|useLoad3d|Load3D|load3d)-[A-Za-z0-9_-]+\.js/g;
+const MAX_SCAN_FILES = 140;
+const SCAN_CONCURRENCY = 6;
+let assetNamesPromise = null;
+
+function loadedAssetScriptUrls() {
+  const urls = new Set();
+  const add = (value) => {
+    if (!value) return;
+    try {
+      const url = new URL(String(value), document.baseURI);
+      if (/\/assets\/[^?#]+\.js$/i.test(url.pathname)) urls.add(url.href);
+    } catch {
+      // ignore malformed URLs
+    }
+  };
+  for (const script of document.querySelectorAll("script[src]")) add(script.src);
+  for (const link of document.querySelectorAll('link[rel="modulepreload"][href], link[as="script"][href]')) add(link.href);
+  if (typeof performance !== "undefined" && performance.getEntriesByType) {
+    for (const entry of performance.getEntriesByType("resource")) add(entry?.name);
+  }
+  // GraphView / core / entry chunks reference the Load3d chunks most directly; scan them first.
+  const priority = (href) => (/GraphView|\/core-|\/index-|useLoad3d|load3d|Load3D/i.test(href) ? 0 : 1);
+  return [...urls].sort((a, b) => priority(a) - priority(b)).slice(0, MAX_SCAN_FILES);
+}
+
+function classifyAssetName(name) {
+  if (/^createLoad3d-/i.test(name)) return "factory";
+  if (/^load3dHost-/i.test(name)) return "host";
+  return "legacy";
+}
+
+async function discoverLoad3dAssets() {
+  const found = { factory: new Map(), host: new Map(), legacy: new Map(), scanned: 0 };
+  const record = (name, baseUrl) => {
+    const bucket = found[classifyAssetName(name)];
+    const href = new URL(name, baseUrl).href;
+    if (!bucket.has(href)) bucket.set(href, name);
   };
 
-  for (const path of STATIC_SERVICE_MODULES) push(path);
+  const scripts = loadedAssetScriptUrls();
+  // Already-loaded chunk URLs may be Load3d chunks themselves.
+  for (const href of scripts) {
+    const name = href.split("/").pop().split("?")[0];
+    if (/^(createLoad3d|load3dHost|load3dService|useLoad3d|Load3D|load3d)-/i.test(name)) record(name, href);
+  }
 
-  // Discover currently active hashed bundles from loaded script/link/resource URLs.
-  const sources = [];
-  for (const script of document.querySelectorAll("script[src]")) sources.push(script.src);
-  for (const link of document.querySelectorAll("link[href]")) sources.push(link.href);
-  if (typeof performance !== "undefined" && performance.getEntriesByType) {
-    for (const entry of performance.getEntriesByType("resource")) {
-      if (entry?.name) sources.push(entry.name);
+  const queue = [...scripts];
+  const haveEnough = () => found.factory.size > 0 && found.host.size > 0;
+  const worker = async () => {
+    while (queue.length && !haveEnough()) {
+      const url = queue.shift();
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) continue;
+        const text = await resp.text();
+        found.scanned += 1;
+        for (const hit of text.matchAll(ASSET_NAME_RE)) record(hit[0], url);
+      } catch {
+        // one unreadable chunk must not abort discovery
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, worker));
+
+  dbg("load3d asset discovery", {
+    scannedFiles: found.scanned,
+    factory: [...found.factory.keys()],
+    host: [...found.host.keys()],
+    legacy: [...found.legacy.keys()],
+  });
+  return found;
+}
+
+function discoverLoad3dAssetsOnce() {
+  assetNamesPromise ||= discoverLoad3dAssets().catch((error) => {
+    assetNamesPromise = null;
+    throw error;
+  });
+  return assetNamesPromise;
+}
+
+function findCreateLoad3d(mod) {
+  if (!mod) return null;
+  if (typeof mod.createLoad3d === "function") return mod.createLoad3d;
+  for (const value of Object.values(mod)) {
+    if (typeof value === "function" && value.name === "createLoad3d") return value;
+  }
+  return null;
+}
+
+function fallbackLoad3dHost() {
+  return {
+    fetchApi: (route, options) => api.fetchApi(route, options),
+    getPLYEngine: () => {
+      try {
+        return app.extensionManager?.setting?.get?.("Comfy.Load3D.PLYEngine") ?? "threejs";
+      } catch {
+        return "threejs";
+      }
+    },
+    resolveImageURL: (path) => (String(path).startsWith("/api") ? String(path) : `/api${path}`),
+  };
+}
+
+async function resolveModernFactory(assets) {
+  let create = null;
+  let factoryUrl = "";
+  for (const url of assets.factory.keys()) {
+    try {
+      create = findCreateLoad3d(await import(url));
+      if (create) {
+        factoryUrl = url;
+        break;
+      }
+    } catch (error) {
+      dbgw("factory import failed", url, error);
     }
   }
-  const assetRegex = /(\/assets\/(?:load3dService|load3d|Load3D|useLoad3d|Load3d|load3dViewer)[^"'\s]*\.js(?:\?[^"'\s]*)?)/i;
-  for (const source of sources) {
-    const hit = String(source || "").match(assetRegex);
-    if (hit?.[1]) push(hit[1]);
-  }
+  if (!create) return null;
 
-  dbg("runtime module candidates", candidates);
-  return candidates;
+  let host = window.comfyAPI?.load3dHost?.load3dHost || null;
+  if (!host) {
+    for (const url of assets.host.keys()) {
+      try {
+        const mod = await import(url);
+        host = window.comfyAPI?.load3dHost?.load3dHost || mod.t || mod.load3dHost || null;
+        if (host) break;
+      } catch (error) {
+        dbgw("host import failed", url, error);
+      }
+    }
+  }
+  host ||= fallbackLoad3dHost();
+  dbg("resolved modern createLoad3d", { factoryUrl, hostFromComfy: host !== null });
+  return { kind: "factory", create: (container, options) => create(container, host, options) };
 }
 
 function extractLoad3dClass(mod) {
   if (!mod) return null;
   const direct = mod.n || mod.Load3d || mod.Load3D || mod.default || null;
   if (looksLikeLoad3dCtor(direct)) return direct;
-
-  // Some Comfy builds export minified symbols with different names.
   for (const value of Object.values(mod)) {
     if (looksLikeLoad3dCtor(value)) return value;
   }
@@ -132,248 +256,150 @@ function looksLikeLoad3dCtor(value) {
   return hasLoad && (hasDispose || hasAnimTime);
 }
 
-async function tryImportLoad3d(paths) {
-  let lastError = null;
-  const tried = [];
-  for (const path of paths) {
-    tried.push(path);
+async function resolveLegacyClass(assets) {
+  for (const url of assets.legacy.keys()) {
     try {
-      dbg("trying dynamic import", path);
-      const mod = await import(path);
-      const klass = extractLoad3dClass(mod);
+      const klass = extractLoad3dClass(await import(url));
       if (klass) {
-        dbg("resolved Load3d from", path, {
-          exports: Object.keys(mod || {}).slice(0, 20),
-        });
-        return klass;
+        dbg("resolved legacy Load3d class", url);
+        return { kind: "class", create: (container, options) => new klass(container, options) };
       }
-      dbgw("module imported but Load3d class not found", path, {
-        exports: Object.keys(mod || {}).slice(0, 20),
-      });
     } catch (error) {
-      lastError = error;
-      dbgw("dynamic import failed", path, error);
+      dbgw("legacy import failed", url, error);
     }
   }
-  const summary = tried.length ? tried.join(", ") : "(none)";
-  const detail = lastError ? ` Last error: ${lastError}` : "";
-  throw new Error(`Could not resolve Load3d module. Tried: ${summary}.${detail}`);
+  return null;
 }
 
-function isLoad3dAssetPath(path) {
-  return /\/assets\/(?:load3dService|load3d|Load3D|useLoad3d|Load3d|load3dViewer)[^"'\s]*\.js(?:\?[^"'\s]*)?$/i.test(path);
+async function resolveLoad3dFactory() {
+  const assets = await discoverLoad3dAssetsOnce();
+  const modern = await resolveModernFactory(assets);
+  if (modern) return modern;
+  const legacy = await resolveLegacyClass(assets);
+  if (legacy) return legacy;
+  throw new Error(
+    `Load3d entry point not found (scanned ${assets.scanned} asset files; ` +
+      `factory=${assets.factory.size}, host=${assets.host.size}, legacy=${assets.legacy.size})`,
+  );
 }
 
-function collectViteEntryUrls() {
-  const entryPatterns = [/\/assets\/index-[^"'/]+\.js/i, /\/assets\/main-[^"'/]+\.js/i];
-  const entryUrls = [];
-  for (const script of document.querySelectorAll("script[src]")) {
-    const src = String(script.src || "");
-    if (entryPatterns.some((re) => re.test(src))) entryUrls.push(src);
-  }
-  if (typeof performance !== "undefined" && performance.getEntriesByType) {
-    for (const entry of performance.getEntriesByType("resource")) {
-      const name = String(entry?.name || "");
-      if (entryPatterns.some((re) => re.test(name))) entryUrls.push(name);
-    }
-  }
-  return [...new Set(entryUrls)].slice(0, 4);
-}
-
-async function collectViteMapModuleCandidates() {
-  const seen = new Set();
-  const out = [];
-  const push = (value) => {
-    const path = normalizePath(value);
-    if (!path || seen.has(path) || !isLoad3dAssetPath(path)) return;
-    seen.add(path);
-    out.push(path);
-  };
-  const relRegex = /"\.\/([^"]+\.js)"/g;
-  for (const url of collectViteEntryUrls()) {
-    try {
-      const resp = await fetch(url, { cache: "no-store" });
-      if (!resp.ok) continue;
-      const text = await resp.text();
-      const base = url.replace(/\/[^/]+\.js(?:\?.*)?$/i, "");
-      for (const hit of text.matchAll(relRegex)) {
-        const name = hit[1];
-        if (!/(?:load3d|Load3d|Load3D|useLoad3d)/i.test(name)) continue;
-        push(`${base}/${name}`);
-      }
-    } catch {
-      dbgw("vite map scan failed", url);
-    }
-  }
-  dbg("vite map module candidates", out);
-  return out;
-}
-
-function collectManifestCandidates() {
-  const seen = new Set();
-  const out = [];
-  const push = (value) => {
-    const path = normalizePath(value);
-    if (!path || seen.has(path)) return;
-    seen.add(path);
-    out.push(path);
-  };
-  const manifestRegex = /(\/assets\/manifest-[^"'\s]+\.json(?:\?[^"'\s]*)?)/i;
-  const sources = [];
-  for (const script of document.querySelectorAll("script[src]")) sources.push(script.src);
-  for (const link of document.querySelectorAll("link[href]")) sources.push(link.href);
-  if (typeof performance !== "undefined" && performance.getEntriesByType) {
-    for (const entry of performance.getEntriesByType("resource")) {
-      if (entry?.name) sources.push(entry.name);
-    }
-  }
-  for (const source of sources) {
-    const hit = String(source || "").match(manifestRegex);
-    if (hit?.[1]) push(hit[1]);
-  }
-  dbg("manifest candidates", out);
-  return out;
-}
-
-function flattenManifestValues(value, out) {
-  if (!value) return;
-  if (typeof value === "string") {
-    out.push(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) flattenManifestValues(item, out);
-    return;
-  }
-  if (typeof value === "object") {
-    for (const item of Object.values(value)) flattenManifestValues(item, out);
-  }
-}
-
-async function collectManifestModuleCandidates() {
-  const manifests = collectManifestCandidates();
-  if (!manifests.length) return [];
-
-  const seen = new Set();
-  const out = [];
-  const push = (value) => {
-    const path = normalizePath(value);
-    if (!path || seen.has(path)) return;
-    if (!isLoad3dAssetPath(path)) return;
-    seen.add(path);
-    out.push(path);
-  };
-
-  for (const manifestPath of manifests) {
-    try {
-      dbg("fetching manifest", manifestPath);
-      const resp = await fetch(manifestPath, { cache: "no-store" });
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      if (data && typeof data === "object" && "short_name" in data && "icons" in data) continue;
-      const values = [];
-      flattenManifestValues(data, values);
-      for (const value of values) push(value);
-    } catch {
-      // Ignore manifest parsing errors; runtime candidates are still available.
-      dbgw("manifest parse failed", manifestPath);
-    }
-  }
-  dbg("manifest module candidates", out);
-  return out;
-}
-
-// Lazy chunks (e.g. load3dService-<hash>.js) are listed inside the entry bundle's preload map
-// even before they are fetched, so scan loaded module scripts for the real hashed names.
-async function collectScriptTextCandidates() {
-  const out = [];
-  const seen = new Set();
-  const scriptUrls = [];
-  for (const script of document.querySelectorAll("script[src]")) scriptUrls.push(script.src);
-  if (typeof performance !== "undefined" && performance.getEntriesByType) {
-    for (const entry of performance.getEntriesByType("resource")) {
-      if (entry?.name && /\/assets\/[^"'\s]+\.js(?:\?|$)/i.test(entry.name)) scriptUrls.push(entry.name);
-    }
-  }
-  const nameRegex = /(?:assets\/|\.\/)((?:load3dService|load3d|Load3D|useLoad3d|Load3d|load3dViewer)[^"'\s,)]*\.js)/gi;
-  for (const url of [...new Set(scriptUrls)].slice(0, 12)) {
-    try {
-      const resp = await fetch(url, { cache: "no-store" });
-      if (!resp.ok) continue;
-      const text = await resp.text();
-      for (const hit of text.matchAll(nameRegex)) {
-        const path = `/assets/${hit[1].replace(/^\.\//, "")}`;
-        if (seen.has(path)) continue;
-        seen.add(path);
-        out.push(path);
-      }
-    } catch {
-      dbgw("script scan failed", url);
-    }
-  }
-  dbg("script text module candidates", out);
-  return out;
-}
-
-async function resolveLoad3dClass() {
-  const runtimeCandidates = collectRuntimeModuleCandidates();
-  try {
-    return await tryImportLoad3d(runtimeCandidates);
-  } catch (runtimeErr) {
-    dbgw("runtime candidates failed; trying script-scan / manifest fallback", runtimeErr);
-    const extra = [
-      ...(await collectViteMapModuleCandidates()),
-      ...(await collectScriptTextCandidates()),
-      ...(await collectManifestModuleCandidates()),
-    ].filter((p) => !runtimeCandidates.includes(p));
-    if (extra.length) {
-      return await tryImportLoad3d([...runtimeCandidates, ...extra]);
-    }
-    dbgw("no extra module candidates available");
-    throw runtimeErr;
-  }
-}
-
-function getLoad3dClass() {
-  load3dPromise ||= resolveLoad3dClass().catch((error) => {
+function getLoad3dFactory() {
+  load3dPromise ||= resolveLoad3dFactory().catch((error) => {
     load3dPromise = null; // allow retry on next execution instead of caching the failure
     throw error;
   });
   return load3dPromise;
 }
 
+// ---------------------------------------------------------------------------
+// Fallback panel (shown only when the in-node viewer cannot be mounted)
+// ---------------------------------------------------------------------------
+
+function fileUrlFromPath(absPath) {
+  if (!absPath) return "";
+  const normalized = String(absPath).replaceAll("\\", "/");
+  return /^[A-Za-z]:\//.test(normalized) ? `file:///${encodeURI(normalized)}` : `file://${encodeURI(normalized)}`;
+}
+
+function parentDir(absPath) {
+  const text = String(absPath || "");
+  const index = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+  return index > 0 ? text.slice(0, index) : "";
+}
+
 function showPreviewError(state, error) {
-  const text = String(error?.message || error || "Unknown preview error");
-  console.error("[MVNT Preview Dance 3D] mount failed", error);
-  if (state?.viewer) {
-    state.viewer.innerHTML = "";
-    const box = document.createElement("div");
-    box.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;padding:14px;background:#111;color:#ffd5d5;font-size:12px;text-align:left;white-space:pre-wrap;overflow:auto;";
-    const msg = document.createElement("div");
-    msg.textContent = "[MVNT Preview Dance 3D] In-node 3D viewer unavailable (this ComfyUI build may not ship load3dService-*.js).\nThe GLB was still generated — use Download below, Comfy's built-in 3D preview on this node, or add a Load3D node.\n\n" + text;
-    box.appendChild(msg);
-    const modelUrl = state.model || "";
-    if (modelUrl) {
-      const link = document.createElement("a");
-      link.href = modelUrl;
-      link.download = "";
-      link.textContent = `Download GLB: ${modelUrl}`;
-      link.style.cssText = "color:#9cf;word-break:break-all;";
-      box.appendChild(link);
-    }
-    if (state.audio?.src) {
-      const player = document.createElement("audio");
-      player.controls = true;
-      player.src = state.audio.src;
-      player.style.cssText = "width:100%;";
-      box.appendChild(player);
-    }
-    state.viewer.appendChild(box);
-  }
+  const detail = String(error?.message || error || "unknown");
+  // Keep the console quiet-ish: one warning with the technical reason, no red error banner in the node.
+  console.warn("[MVNT Preview Dance 3D] in-node 3D viewer not mounted; showing file panel instead.", error);
   if (state?.label) {
-    state.label.textContent = "Preview error";
-    state.label.title = text;
+    state.label.textContent = "3D 미리보기 없음";
+    state.label.title = detail;
   }
+  if (!state?.viewer) return;
+
+  const payload = state.payload || {};
+  const absPath = payload.model_abs_path || (/^([A-Za-z]:[\\/]|\/)/.test(String(payload.model_file || "")) ? payload.model_file : "");
+  const folder = payload.model_dir || parentDir(absPath);
+  const displayPath = absPath || payload.model_file || state.model || "";
+
+  state.viewer.innerHTML = "";
+  const box = document.createElement("div");
+  box.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;gap:10px;padding:16px;background:#f6f1e8;color:#1f2937;font-size:12px;line-height:1.5;overflow:auto;box-sizing:border-box;";
+
+  const title = document.createElement("div");
+  title.textContent = "이 ComfyUI 버전에서는 노드 안 3D 미리보기를 쓸 수 없습니다. GLB 파일은 정상적으로 만들어졌습니다.";
+  title.style.cssText = "font-size:13px;font-weight:600;";
+  box.appendChild(title);
+
+  if (displayPath) {
+    const pathRow = document.createElement("div");
+    pathRow.style.cssText = "display:flex;gap:6px;align-items:flex-start;";
+    const pathText = document.createElement("code");
+    pathText.textContent = displayPath;
+    pathText.style.cssText = "flex:1;padding:6px 8px;background:#fff;border:1px solid #d6cfc2;border-radius:6px;word-break:break-all;user-select:all;";
+    const copy = document.createElement("button");
+    copy.textContent = "경로 복사";
+    copy.style.cssText = "height:28px;padding:0 10px;border-radius:6px;border:1px solid #4b5563;background:#1f2937;color:#fff;cursor:pointer;flex:none;";
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(displayPath);
+        copy.textContent = "복사됨";
+      } catch {
+        copy.textContent = "Ctrl+C로 복사";
+      }
+      setTimeout(() => { copy.textContent = "경로 복사"; }, 1500);
+    });
+    pathRow.append(pathText, copy);
+    box.appendChild(pathRow);
+
+    const hint = document.createElement("div");
+    hint.textContent = "폴더에서 열기: 탐색기 주소창에 위 경로의 폴더를 붙여 넣으세요. Blender/3D 뷰어로 열 수 있습니다.";
+    hint.style.cssText = "color:#4b5563;";
+    box.appendChild(hint);
+    if (folder) {
+      const folderText = document.createElement("div");
+      folderText.textContent = `폴더: ${folder}`;
+      folderText.style.cssText = "color:#4b5563;word-break:break-all;user-select:all;";
+      box.appendChild(folderText);
+    }
+  }
+
+  const links = document.createElement("div");
+  links.style.cssText = "display:flex;gap:12px;flex-wrap:wrap;";
+  const addLink = (href, text, download = false) => {
+    if (!href) return;
+    const a = document.createElement("a");
+    a.href = href;
+    a.textContent = text;
+    a.target = "_blank";
+    a.rel = "noopener";
+    if (download) a.download = "";
+    a.style.cssText = "color:#1d4ed8;";
+    links.appendChild(a);
+  };
+  addLink(state.model, "GLB 다운로드", true);
+  addLink(fileUrlFromPath(absPath), "file:// 로 열기 (브라우저가 막을 수 있음)");
+  if (links.childNodes.length) box.appendChild(links);
+
+  if (state.audio?.src) {
+    const player = document.createElement("audio");
+    player.controls = true;
+    player.src = state.audio.src;
+    player.style.cssText = "width:100%;";
+    box.appendChild(player);
+  }
+
+  const more = document.createElement("details");
+  more.style.cssText = "color:#6b7280;";
+  const summary = document.createElement("summary");
+  summary.textContent = "기술 정보";
+  const pre = document.createElement("pre");
+  pre.textContent = detail;
+  pre.style.cssText = "margin:4px 0 0;white-space:pre-wrap;word-break:break-all;";
+  more.append(summary, pre);
+  box.appendChild(more);
+
+  state.viewer.appendChild(box);
 }
 
 async function safeMount(node, payload) {
@@ -954,7 +980,8 @@ function startSyncLoop(state) {
 
 async function mount(node, payload) {
   const state = ensureDom(node);
-  const modelUrl = viewUrl(payload?.model_file, "output");
+  state.payload = payload;
+  const modelUrl = viewUrl(payload?.model_view || payload?.model_file, "output");
   dbg("mount start", {
     nodeId: node?.id,
     modelUrl,
@@ -969,13 +996,20 @@ async function mount(node, payload) {
   if (!modelUrl || (modelUrl === state.model && state.viewer3d)) return;
 
   state.model = modelUrl;
-  const Load3d = await getLoad3dClass();
-  dbg("Load3d resolved", { ctorName: Load3d?.name || "(anonymous)" });
+  const load3d = await getLoad3dFactory();
+  dbg("Load3d resolved", { kind: load3d.kind });
   stopSyncLoop(state);
   state.viewer3d?.dispose?.();
+  state.viewer3d = null;
   state.viewer.innerHTML = "";
-  state.viewer3d = new Load3d(state.viewer, { width: 800, height: 600, isViewerMode: true });
-  await state.viewer3d.loadModel(modelUrl);
+  state.viewer3d = load3d.create(state.viewer, { width: 800, height: 600, isViewerMode: true });
+  const loadResult = await state.viewer3d.loadModel(modelUrl);
+  // Newer frontends resolve with a status string instead of throwing.
+  if (typeof loadResult === "string" && loadResult !== "loaded") {
+    state.viewer3d?.dispose?.();
+    state.viewer3d = null;
+    throw new Error(`Load3d.loadModel returned "${loadResult}" for ${modelUrl}`);
+  }
   dbg("model loaded", { modelUrl });
   state.viewer3d.updateStatusMouseOnViewer?.(true);
   state.rootMotionTrack = await loadRootMotionTrack(modelUrl);
