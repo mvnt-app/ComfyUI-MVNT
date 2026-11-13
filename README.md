@@ -27,18 +27,19 @@ No legacy fallback, Tripo/T-pose, Kling profiles, BVH or internal render routes 
 
 | Node | What it does |
 |---|---|
-| `MVNT Audio Segment` | Selects the audio segment to send (max 40 seconds). |
+| `MVNT Audio Segment` | Optional, **not in the default workflow**. Trim now lives in `MVNT Generate Dance` (`trim_start`/`trim_end`). |
 | `MVNT List Styles` | `GET /v1/styles`; outputs JSON and one style name per line. |
-| `MVNT Generate Dance` | Uploads audio (`trim_start`/`trim_end`, 0 = whole clip), polls, downloads the animated GLB. |
+| `MVNT Generate Dance` | Uploads audio (`trim_start`/`trim_end` in seconds, `trim_end` 0 = whole clip), polls, downloads the animated GLB. |
 | `MVNT Preview Dance 3D` | Shows the GLB in ComfyUI's 3D preview with audio. |
 | `MVNT Render Dance Video` | `format=mp4` with `preset` (`standard` 1920x1080 / `shorts` 1080x1920) and `camera_mode` (`tracking`/`dynamic`/`idol`). Synchronous, can take minutes. |
 
 ```text
-Load Audio -> MVNT Audio Segment -> MVNT Generate Dance -> MVNT Preview Dance 3D
-                                                        -> MVNT Render Dance Video -> Save Video
+Load Audio -> MVNT Generate Dance -> MVNT Preview Dance 3D
+                                          -> MVNT Render Dance Video -> Save Video
 ```
 
-Load [`workflows/compact_v1_api.json`](./workflows/compact_v1_api.json) for this graph.
+Load [`workflows/compact_v1_api.json`](./workflows/compact_v1_api.json) for this graph (default trim 0-20 s on `MVNT Generate Dance`;
+`MVNT Audio Segment` was removed from the default graph to avoid trimming twice).
 
 ---
 
@@ -113,6 +114,15 @@ Full character workflows may require those custom nodes separately.
 **3D preview looks different across ComfyUI versions**
 `MVNT Preview Dance 3D` uses ComfyUI's native 3D preview. The exact viewer UI
 depends on your ComfyUI build version.
+
+**`Could not resolve Load3d module ... Failed to fetch dynamically imported module .../assets/load3dService-*.js`**
+The in-node viewer imports Comfy frontend's internal hashed `load3dService-<hash>.js` chunk, whose name changes every
+frontend release (seen on Comfy Desktop v0.45.3). The extension now discovers the real name at runtime
+(loaded resources, then the entry bundle, then the asset manifest) and no longer hard-codes hashes.
+If it still fails, the node shows a download link for the GLB and an audio player instead of the 3D viewer.
+The GLB is always saved as `ComfyUI/output/mvnt_<id>.motion.glb`, and `MVNT Render Dance Video` (MP4) does not depend on the viewer.
+Workarounds: update the extension (`git pull`), hard-refresh the Comfy window (Ctrl+Shift+R) after a Comfy update,
+or open the saved GLB in any glTF viewer / Comfy's own `Load3D` node.
 
 ---
 

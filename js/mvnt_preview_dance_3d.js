@@ -1,7 +1,8 @@
 import { app } from "../../scripts/app.js";
 
 const NODE = "MVNTPreviewDance3D";
-const STATIC_SERVICE_MODULES = ["/assets/load3dService-Bgd80_fq.js", "/assets/load3dService-B9rS34_t.js"];
+// Comfy frontend asset hashes change per release; never hard-code them. Candidates are discovered at runtime.
+const STATIC_SERVICE_MODULES = [];
 const VIEW_H = 420;
 const BAR_H = 42;
 const TRACK_YAW_LERP = 0.055;
@@ -232,23 +233,61 @@ async function collectManifestModuleCandidates() {
   return out;
 }
 
+// Lazy chunks (e.g. load3dService-<hash>.js) are listed inside the entry bundle's preload map
+// even before they are fetched, so scan loaded module scripts for the real hashed names.
+async function collectScriptTextCandidates() {
+  const out = [];
+  const seen = new Set();
+  const scriptUrls = [];
+  for (const script of document.querySelectorAll("script[src]")) scriptUrls.push(script.src);
+  if (typeof performance !== "undefined" && performance.getEntriesByType) {
+    for (const entry of performance.getEntriesByType("resource")) {
+      if (entry?.name && /\/assets\/[^"'\s]+\.js(?:\?|$)/i.test(entry.name)) scriptUrls.push(entry.name);
+    }
+  }
+  const nameRegex = /assets\/((?:load3dService|load3d|Load3D|useLoad3d)[^"'\s,)]*\.js)/gi;
+  for (const url of [...new Set(scriptUrls)].slice(0, 12)) {
+    try {
+      const resp = await fetch(url, { cache: "force-cache" });
+      if (!resp.ok) continue;
+      const text = await resp.text();
+      for (const hit of text.matchAll(nameRegex)) {
+        const path = `/assets/${hit[1]}`;
+        if (seen.has(path)) continue;
+        seen.add(path);
+        out.push(path);
+      }
+    } catch {
+      dbgw("script scan failed", url);
+    }
+  }
+  dbg("script text module candidates", out);
+  return out;
+}
+
 async function resolveLoad3dClass() {
   const runtimeCandidates = collectRuntimeModuleCandidates();
   try {
     return await tryImportLoad3d(runtimeCandidates);
   } catch (runtimeErr) {
-    dbgw("runtime candidates failed; trying manifest fallback", runtimeErr);
-    const manifestCandidates = await collectManifestModuleCandidates();
-    if (manifestCandidates.length) {
-      return await tryImportLoad3d([...runtimeCandidates, ...manifestCandidates]);
+    dbgw("runtime candidates failed; trying script-scan / manifest fallback", runtimeErr);
+    const extra = [
+      ...(await collectScriptTextCandidates()),
+      ...(await collectManifestModuleCandidates()),
+    ].filter((p) => !runtimeCandidates.includes(p));
+    if (extra.length) {
+      return await tryImportLoad3d([...runtimeCandidates, ...extra]);
     }
-    dbgw("no manifest candidates available");
+    dbgw("no extra module candidates available");
     throw runtimeErr;
   }
 }
 
 function getLoad3dClass() {
-  load3dPromise ||= resolveLoad3dClass();
+  load3dPromise ||= resolveLoad3dClass().catch((error) => {
+    load3dPromise = null; // allow retry on next execution instead of caching the failure
+    throw error;
+  });
   return load3dPromise;
 }
 
@@ -258,8 +297,26 @@ function showPreviewError(state, error) {
   if (state?.viewer) {
     state.viewer.innerHTML = "";
     const box = document.createElement("div");
-    box.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;background:#111;color:#ffd5d5;font-size:12px;text-align:left;white-space:pre-wrap;";
-    box.textContent = `[MVNT Preview Dance 3D]\n${text}`;
+    box.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;padding:14px;background:#111;color:#ffd5d5;font-size:12px;text-align:left;white-space:pre-wrap;overflow:auto;";
+    const msg = document.createElement("div");
+    msg.textContent = "[MVNT Preview Dance 3D] In-node 3D viewer unavailable (ComfyUI frontend version mismatch).\nThe GLB was still generated; use the file path/link below, or Comfy's Load3D / Preview3D node.\n\n" + text;
+    box.appendChild(msg);
+    const modelUrl = state.model || "";
+    if (modelUrl) {
+      const link = document.createElement("a");
+      link.href = modelUrl;
+      link.download = "";
+      link.textContent = `Download GLB: ${modelUrl}`;
+      link.style.cssText = "color:#9cf;word-break:break-all;";
+      box.appendChild(link);
+    }
+    if (state.audio?.src) {
+      const player = document.createElement("audio");
+      player.controls = true;
+      player.src = state.audio.src;
+      player.style.cssText = "width:100%;";
+      box.appendChild(player);
+    }
     state.viewer.appendChild(box);
   }
   if (state?.label) {
