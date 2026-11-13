@@ -121,8 +121,10 @@ frontend release (seen on Comfy Desktop v0.45.3). The extension now discovers th
 (loaded resources, then the entry bundle, then the asset manifest) and no longer hard-codes hashes.
 If it still fails, the node shows a download link for the GLB and an audio player instead of the 3D viewer.
 The GLB is always saved as `ComfyUI/output/mvnt_<id>.motion.glb`, and `MVNT Render Dance Video` (MP4) does not depend on the viewer.
-Workarounds: update the extension (`git pull`), hard-refresh the Comfy window (Ctrl+Shift+R) after a Comfy update,
-or open the saved GLB in any glTF viewer / Comfy's own `Load3D` node.
+Workarounds: update the extension (`git pull`), **Comfy Desktop fully quit → restart**, hard-refresh the Comfy window (Ctrl+Shift+R),
+and in DevTools → Network confirm `extensions/ComfyUI-MVNT/mvnt_preview_dance_3d.js` starts with
+`const STATIC_SERVICE_MODULES = []` (if you still see `Bgd80_fq` / `B9rS34_t` in that file, the browser is serving a cached old copy).
+Or open the saved GLB in any glTF viewer / Comfy's own `Load3D` node.
 
 ---
 
