@@ -5,6 +5,9 @@ const NODE = "MVNTPreviewDance3D";
 // Comfy frontend asset hashes change per release; never hard-code them. Names are discovered at runtime.
 const VIEW_H = 420;
 const BAR_H = 42;
+const LAYOUT_STYLE_ID = "mvnt-preview-dance3d-layout";
+const ROOT_CLASS = "mvnt-preview-dance3d-root";
+const VIEWER_CLASS = "mvnt-preview-dance3d-viewer";
 const TRACK_YAW_LERP = 0.055;
 const TRACK_POS_LERP = 0.78;
 const TRACK_DISTANCE_FACTOR = 1.0;
@@ -44,14 +47,109 @@ function dbgw(...args) {
   if (DEBUG) console.warn("[MVNT Preview Dance 3D][dbg]", ...args);
 }
 
+function ensureLayoutStyles() {
+  if (document.getElementById(LAYOUT_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = LAYOUT_STYLE_ID;
+  style.textContent = `
+.${ROOT_CLASS} {
+  box-sizing: border-box;
+  align-self: stretch;
+  min-width: 0;
+}
+.${VIEWER_CLASS} {
+  width: 100% !important;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.${VIEWER_CLASS} > * {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
+}
+.${VIEWER_CLASS} canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}`;
+  document.head.appendChild(style);
+}
+
+function nodeInnerWidth(node, fallback = 680) {
+  const sizeW = Array.isArray(node?.size) ? Number(node.size[0]) : 0;
+  const inner = sizeW > 0 ? sizeW - 20 : fallback;
+  return Math.max(320, inner);
+}
+
+function measureViewerSize(state, node) {
+  const width = Math.max(
+    64,
+    state.viewer?.clientWidth || state.root?.clientWidth || nodeInnerWidth(node),
+  );
+  const height = Math.max(64, state.viewer?.clientHeight || VIEW_H);
+  return { width, height };
+}
+
+function stretchDomWidgetAncestors(el, node) {
+  let parent = el?.parentElement;
+  for (let depth = 0; depth < 10 && parent; depth += 1) {
+    if (parent === node) break;
+    parent.style.width = "100%";
+    parent.style.maxWidth = "100%";
+    parent.style.boxSizing = "border-box";
+    parent.style.minWidth = "0";
+    parent = parent.parentElement;
+  }
+}
+
+function syncWidgetLayout(node, state, reason = "layout") {
+  if (!state?.root) return;
+  ensureLayoutStyles();
+  const width = nodeInnerWidth(node);
+  state.root.style.width = `${width}px`;
+  state.root.style.maxWidth = `${width}px`;
+  state.root.style.minWidth = "0";
+  state.root.style.boxSizing = "border-box";
+  state.viewer.style.width = "100%";
+  state.viewer.style.flex = "1 1 auto";
+  state.viewer.style.minWidth = "0";
+  stretchDomWidgetAncestors(state.root, node);
+  hardRefreshViewer(state, reason);
+  dbg("syncWidgetLayout", { reason, width, viewerW: state.viewer?.clientWidth });
+}
+
+function installLayoutObservers(node, state) {
+  if (state.layoutObserversInstalled) return;
+  state.layoutObserversInstalled = true;
+
+  const onResize = node.onResize;
+  node.onResize = function onMvntPreviewResize(size) {
+    onResize?.apply(this, arguments);
+    syncWidgetLayout(this, state, "node-onResize");
+    this.setDirtyCanvas?.(true, true);
+    return size;
+  };
+
+  if (typeof ResizeObserver !== "undefined") {
+    state.layoutObserver = new ResizeObserver(() => {
+      syncWidgetLayout(node, state, "resize-observer");
+      node.setDirtyCanvas?.(true, true);
+    });
+    state.layoutObserver.observe(state.root);
+    state.layoutObserver.observe(state.viewer);
+  }
+}
+
 function hardRefreshViewer(state, reason = "manual") {
   if (!state?.viewer3d) {
     dbgw("hardRefreshViewer skipped (no viewer3d)", { reason });
     return;
   }
   try {
-    const width = Math.max(64, state.viewer?.clientWidth || state.root?.clientWidth || 800);
-    const height = Math.max(64, state.viewer?.clientHeight || VIEW_H);
+    const { width, height } = measureViewerSize(state, state.node);
+    state.viewer3d.setTargetSize?.(width, height);
     state.viewer3d.renderer?.setSize?.(width, height, false);
     state.viewer3d.refreshViewport?.();
     state.viewer3d.forceRender?.();
@@ -60,6 +158,16 @@ function hardRefreshViewer(state, reason = "manual") {
   } catch (error) {
     dbgw("hardRefreshViewer failed", { reason, error });
   }
+}
+
+function waitForLayoutFrames(frames = 2) {
+  return new Promise((resolve) => {
+    const step = (left) => {
+      if (left <= 0) resolve();
+      else requestAnimationFrame(() => step(left - 1));
+    };
+    step(frames);
+  });
 }
 
 function resumeAfterVisibility(state, reason) {
@@ -553,10 +661,13 @@ function sampleRootMotion(track, time) {
 function ensureDom(node) {
   if (node.__mvntPreview) return node.__mvntPreview;
 
+  ensureLayoutStyles();
   const root = document.createElement("div");
-  root.style.cssText = `width:100%;height:${VIEW_H + BAR_H}px;display:flex;flex-direction:column;background:#f6f1e8;border-radius:8px;overflow:hidden;pointer-events:auto`;
+  root.className = ROOT_CLASS;
+  root.style.cssText = `width:100%;height:${VIEW_H + BAR_H}px;display:flex;flex-direction:column;background:#f6f1e8;border-radius:8px;overflow:hidden;pointer-events:auto;box-sizing:border-box;min-width:0`;
   const viewer = document.createElement("div");
-  viewer.style.cssText = "flex:1;min-height:320px;position:relative;pointer-events:auto;background:#f6f1e8";
+  viewer.className = VIEWER_CLASS;
+  viewer.style.cssText = "flex:1 1 auto;width:100%;min-width:0;min-height:320px;position:relative;pointer-events:auto;background:#f6f1e8;overflow:hidden;box-sizing:border-box";
   const bar = document.createElement("div");
   bar.style.cssText = "height:42px;display:flex;align-items:center;gap:8px;padding:6px 8px;background:#101215;pointer-events:auto";
   const play = document.createElement("button");
@@ -587,9 +698,16 @@ function ensureDom(node) {
     serialize: false,
     selectOn: ["click"],
   });
-  if (widget) widget.computeSize = (width) => [Math.max(420, width || node.size?.[0] || 620), VIEW_H + BAR_H];
+  if (widget) {
+    widget.computeSize = function computeMvntPreviewSize(width) {
+      const w = width > 0 ? width : nodeInnerWidth(node);
+      return [w, VIEW_H + BAR_H];
+    };
+  }
 
   const state = {
+    node,
+    domWidget: widget,
     root, viewer, play, tracking, label, range, audio,
     viewer3d: null, model: "", duration: 0, animationFrameId: 0, playing: false, lastMotionTime: 0,
     viewerHover: false, windowWheelHandler: null, cameraTracking: true, trackingBone: null, rootMotionTrack: null,
@@ -597,6 +715,8 @@ function ensureDom(node) {
     trackDistance: 0, trackTargetY: 0, trackCameraY: 0, trackTargetYOffset: 0, trackCameraYOffset: 0,
     trackBaseBoneX: 0, trackBaseBoneZ: 0, trackBaseTargetX: 0, trackBaseTargetZ: 0, trackBaseCameraX: 0, trackBaseCameraZ: 0,
     visibilityHandlersInstalled: false,
+    layoutObserversInstalled: false,
+    layoutObserver: null,
   };
   const enterViewer = () => { state.viewerHover = true; state.viewer3d?.updateStatusMouseOnViewer?.(true); };
   const leaveViewer = () => { state.viewerHover = false; state.viewer3d?.updateStatusMouseOnViewer?.(false); };
@@ -624,6 +744,8 @@ function ensureDom(node) {
   }
   node.__mvntPreview = state;
   node.size = [Math.max(node.size?.[0] || 680, 680), Math.max(node.size?.[1] || 620, 620)];
+  syncWidgetLayout(node, state, "ensureDom");
+  installLayoutObservers(node, state);
   return state;
 }
 
@@ -1002,7 +1124,10 @@ async function mount(node, payload) {
   state.viewer3d?.dispose?.();
   state.viewer3d = null;
   state.viewer.innerHTML = "";
-  state.viewer3d = load3d.create(state.viewer, { width: 800, height: 600, isViewerMode: true });
+  syncWidgetLayout(node, state, "pre-mount");
+  await waitForLayoutFrames(2);
+  const { width, height } = measureViewerSize(state, node);
+  state.viewer3d = load3d.create(state.viewer, { width, height, isViewerMode: true });
   const loadResult = await state.viewer3d.loadModel(modelUrl);
   // Newer frontends resolve with a status string instead of throwing.
   if (typeof loadResult === "string" && loadResult !== "loaded") {
@@ -1021,6 +1146,7 @@ async function mount(node, payload) {
   state.duration = state.viewer3d.getAnimationDuration?.() || 0;
   startSyncLoop(state);
   updateBar(state);
+  syncWidgetLayout(node, state, "post-mount");
   node.setDirtyCanvas(true, true);
 }
 
