@@ -1,5 +1,9 @@
 """ComfyUI-MVNT: AI dance choreography from music (compact v1)."""
 
+from .env_local import load_package_env_files
+
+load_package_env_files()
+
 from .nodes import (
     MVNTAudioSegment,
     MVNTListStyles,
