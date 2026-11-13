@@ -55,13 +55,18 @@ function ensureLayoutStyles() {
 .${ROOT_CLASS} {
   box-sizing: border-box;
   align-self: stretch;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
+  overflow: hidden;
 }
 .${VIEWER_CLASS} {
   width: 100% !important;
+  max-width: 100% !important;
   min-width: 0;
   overflow: hidden;
   box-sizing: border-box;
+  position: relative;
 }
 .${VIEWER_CLASS} > * {
   width: 100% !important;
@@ -71,8 +76,8 @@ function ensureLayoutStyles() {
 }
 .${VIEWER_CLASS} canvas {
   display: block;
-  width: 100% !important;
-  height: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
 }`;
   document.head.appendChild(style);
 }
@@ -83,41 +88,87 @@ function nodeInnerWidth(node, fallback = 680) {
   return Math.max(320, inner);
 }
 
-function measureViewerSize(state, node) {
-  const width = Math.max(
-    64,
-    state.viewer?.clientWidth || state.root?.clientWidth || nodeInnerWidth(node),
-  );
-  const height = Math.max(64, state.viewer?.clientHeight || VIEW_H);
-  return { width, height };
+/** Widest measured clientWidth on the DOM chain above the widget root (Comfy DOM widget slot). */
+function widgetHostWidth(state) {
+  let el = state?.root?.parentElement;
+  let best = 0;
+  for (let depth = 0; depth < 12 && el; depth += 1) {
+    const w = el.clientWidth;
+    if (w > 0) best = Math.max(best, w);
+    if (el.classList?.contains("litegraph") || el.classList?.contains("graphdialog")) break;
+    el = el.parentElement;
+  }
+  return best;
 }
 
-function stretchDomWidgetAncestors(el, node) {
+function capToHost(size, hostWidth) {
+  if (!hostWidth || hostWidth <= 0) return size;
+  return Math.max(64, Math.min(size, hostWidth));
+}
+
+function measureViewerSize(state, node, contentRect = null) {
+  const hostW = widgetHostWidth(state);
+  const ceiling = hostW > 0 ? hostW : nodeInnerWidth(node);
+  let width =
+    contentRect?.width > 0
+      ? contentRect.width
+      : state.viewer?.clientWidth || state.root?.clientWidth || ceiling;
+  let height =
+    contentRect?.height > 0
+      ? contentRect.height
+      : state.viewer?.clientHeight || VIEW_H;
+  width = Math.floor(capToHost(width, ceiling));
+  height = Math.max(64, Math.floor(height));
+  return { width, height, hostW: ceiling };
+}
+
+function stretchDomWidgetAncestors(el) {
   let parent = el?.parentElement;
   for (let depth = 0; depth < 10 && parent; depth += 1) {
-    if (parent === node) break;
+    if (parent.classList?.contains("litegraph")) break;
     parent.style.width = "100%";
     parent.style.maxWidth = "100%";
     parent.style.boxSizing = "border-box";
     parent.style.minWidth = "0";
+    parent.style.overflow = "hidden";
     parent = parent.parentElement;
   }
 }
 
-function syncWidgetLayout(node, state, reason = "layout") {
+function clampLoad3dDom(viewer) {
+  if (!viewer) return;
+  for (const child of viewer.children) {
+    child.style.width = "100%";
+    child.style.maxWidth = "100%";
+    child.style.height = "100%";
+    child.style.boxSizing = "border-box";
+    child.style.overflow = "hidden";
+    const canvas = child.querySelector?.("canvas") || (child.tagName === "CANVAS" ? child : null);
+    if (canvas) {
+      canvas.style.maxWidth = "100%";
+      canvas.style.display = "block";
+    }
+  }
+}
+
+function syncWidgetLayout(node, state, reason = "layout", contentRect = null) {
   if (!state?.root) return;
   ensureLayoutStyles();
-  const width = nodeInnerWidth(node);
-  state.root.style.width = `${width}px`;
-  state.root.style.maxWidth = `${width}px`;
+  state.root.style.width = "100%";
+  state.root.style.maxWidth = "100%";
   state.root.style.minWidth = "0";
   state.root.style.boxSizing = "border-box";
+  state.root.style.overflow = "hidden";
   state.viewer.style.width = "100%";
+  state.viewer.style.maxWidth = "100%";
   state.viewer.style.flex = "1 1 auto";
   state.viewer.style.minWidth = "0";
-  stretchDomWidgetAncestors(state.root, node);
-  hardRefreshViewer(state, reason);
-  dbg("syncWidgetLayout", { reason, width, viewerW: state.viewer?.clientWidth });
+  state.viewer.style.overflow = "hidden";
+  stretchDomWidgetAncestors(state.root);
+  clampLoad3dDom(state.viewer);
+  hardRefreshViewer(state, reason, contentRect);
+  const { width, hostW } = measureViewerSize(state, node, contentRect);
+  dbg("syncWidgetLayout", { reason, hostW, width, viewerW: state.viewer?.clientWidth });
 }
 
 function installLayoutObservers(node, state) {
@@ -133,22 +184,33 @@ function installLayoutObservers(node, state) {
   };
 
   if (typeof ResizeObserver !== "undefined") {
-    state.layoutObserver = new ResizeObserver(() => {
-      syncWidgetLayout(node, state, "resize-observer");
+    state.layoutObserver = new ResizeObserver((entries) => {
+      let rect = null;
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect || {};
+        if (width > 0 || height > 0) {
+          rect = {
+            width: width > 0 ? width : rect?.width,
+            height: height > 0 ? height : rect?.height,
+          };
+        }
+      }
+      syncWidgetLayout(node, state, "resize-observer", rect);
       node.setDirtyCanvas?.(true, true);
     });
-    state.layoutObserver.observe(state.root);
+    const host = state.root?.parentElement;
+    if (host) state.layoutObserver.observe(host);
     state.layoutObserver.observe(state.viewer);
   }
 }
 
-function hardRefreshViewer(state, reason = "manual") {
+function hardRefreshViewer(state, reason = "manual", contentRect = null) {
   if (!state?.viewer3d) {
     dbgw("hardRefreshViewer skipped (no viewer3d)", { reason });
     return;
   }
   try {
-    const { width, height } = measureViewerSize(state, state.node);
+    const { width, height } = measureViewerSize(state, state.node, contentRect);
     state.viewer3d.setTargetSize?.(width, height);
     state.viewer3d.renderer?.setSize?.(width, height, false);
     state.viewer3d.refreshViewport?.();
@@ -701,7 +763,7 @@ function ensureDom(node) {
   if (widget) {
     widget.computeSize = function computeMvntPreviewSize(width) {
       const w = width > 0 ? width : nodeInnerWidth(node);
-      return [w, VIEW_H + BAR_H];
+      return [Math.max(320, w), VIEW_H + BAR_H];
     };
   }
 
@@ -1128,6 +1190,7 @@ async function mount(node, payload) {
   await waitForLayoutFrames(2);
   const { width, height } = measureViewerSize(state, node);
   state.viewer3d = load3d.create(state.viewer, { width, height, isViewerMode: true });
+  clampLoad3dDom(state.viewer);
   const loadResult = await state.viewer3d.loadModel(modelUrl);
   // Newer frontends resolve with a status string instead of throwing.
   if (typeof loadResult === "string" && loadResult !== "loaded") {
