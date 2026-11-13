@@ -22,9 +22,16 @@ DEFAULT_CONNECT_TIMEOUT = 20
 # Live K-pop checkpoint is v16 (v16_boundary_fixed3s_epoch94).
 DEFAULT_MODEL_VERSION = "v16"
 
-_USER_AGENT = "comfyui-mvnt/1.1.2"
+_USER_AGENT = "comfyui-mvnt/2.0.0-compact"
 _VALID_KEY_PREFIXES = ("mvnt_live_", "mvnt_test_", "mk_live_", "mk_test_")
 _GENERATION_BACKENDS: dict[str, str] = {}
+# MP4 GET is synchronous on the server (GPU capture, nginx /v1/ 900s).
+MP4_READ_TIMEOUT = 960
+
+
+def compact_v1_enabled() -> bool:
+    """Compact v1 is the default on this branch. Set MVNT_COMPACT_V1=0 to re-enable legacy fallback."""
+    return os.environ.get("MVNT_COMPACT_V1", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _base_url(api_base: str | None = None) -> str:
@@ -250,6 +257,10 @@ def _raise_for_error(resp: requests.Response):
             msg = body.get("error", {}).get("message", str(body))
     else:
         msg = body
+    if resp.status_code == 401:
+        msg = f"{msg} (check MVNT_API_KEY / node api_key)"
+    elif resp.status_code == 402:
+        msg = f"{msg} (insufficient credits)"
     raise RuntimeError(f"MVNT API error ({resp.status_code}): {msg}")
 
 
@@ -343,6 +354,8 @@ def _is_mp4_file(path: str) -> bool:
 
 
 def _should_fallback_to_legacy(resp) -> bool:
+    if compact_v1_enabled():
+        return False
     if resp is None:
         return True
     # /v1 is studio billing. Old Comfy keys are accepted on generate-motion-lda,
@@ -424,13 +437,21 @@ def create_generation(
     key = _get_api_key(api_key)
     base = _base_url(api_base)
     file_paths = {"audio": audio_path}
-    if character_path:
-        file_paths["character"] = character_path
-    resp = _http(
-        "POST",
-        f"{base}/generations",
-        headers=_headers(key, idempotency_key=idempotency_key or make_idempotency_key()),
-        data={
+    if compact_v1_enabled():
+        # Public contract fields only (openapi-compact-v1.yaml).
+        form = {
+            "style": style,
+            "trim_start": trim_start,
+            "trim_end": trim_end,
+            "seed": seed,
+            "guidance": guidance,
+            "temperature": temperature,
+            "mode": mode,
+        }
+    else:
+        if character_path:
+            file_paths["character"] = character_path
+        form = {
             "model_version": DEFAULT_MODEL_VERSION,
             "style": style,
             "output_format": output_format,
@@ -444,7 +465,12 @@ def create_generation(
             "mode": mode,
             "save_hard_yaw_lock_variant": str(bool(save_hard_yaw_lock_variant)).lower(),
             **({"n_steps": n_steps} if n_steps else {}),
-        },
+        }
+    resp = _http(
+        "POST",
+        f"{base}/generations",
+        headers=_headers(key, idempotency_key=idempotency_key or make_idempotency_key()),
+        data=form,
         file_paths=file_paths,
         timeout=(DEFAULT_CONNECT_TIMEOUT, 60),
     )
@@ -544,7 +570,7 @@ def poll_generation(
     **kw,
 ) -> dict:
     key = _get_api_key(api_key)
-    if _GENERATION_BACKENDS.get(generation_id) == "legacy":
+    if not compact_v1_enabled() and _GENERATION_BACKENDS.get(generation_id) == "legacy":
         return poll_legacy_generation(
             generation_id,
             api_key=api_key,
@@ -593,7 +619,7 @@ def download_generation_output(
     allow_missing: bool = False,
     **params,
 ) -> str:
-    if _GENERATION_BACKENDS.get(generation_id) == "legacy":
+    if not compact_v1_enabled() and _GENERATION_BACKENDS.get(generation_id) == "legacy":
         return download_legacy_generation_output(
             generation_id,
             dest_path,
@@ -612,7 +638,10 @@ def download_generation_output(
     for name, value in params.items():
         if value is not None:
             query[name] = value
-    request_timeout = 600 if (kind == "render" or format == "mp4") else 180
+    if kind == "render" or format == "mp4":
+        request_timeout = (DEFAULT_CONNECT_TIMEOUT, MP4_READ_TIMEOUT)
+    else:
+        request_timeout = 180
 
     resp = _http(
         "GET",
@@ -941,14 +970,51 @@ def download_legacy_generation_output(
 
 def list_styles(*, api_key: str | None = None, api_base: str | None = None) -> list[dict]:
     key = _get_api_key(api_key)
-    resp = requests.get(
+    resp = _http(
+        "GET",
         f"{_base_url(api_base)}/styles",
         headers=_headers(key),
-        timeout=15,
+        timeout=(DEFAULT_CONNECT_TIMEOUT, 30),
     )
     _raise_for_error(resp)
     body = resp.json()
     return body.get("styles", body if isinstance(body, list) else [])
+
+
+def style_names(styles: list) -> list[str]:
+    """Normalize GET /styles items (plain strings or objects with `name`) to style names."""
+    names = []
+    for item in styles or []:
+        name = item.get("name") if isinstance(item, dict) else item
+        if name:
+            names.append(str(name))
+    return names
+
+
+def download_glb(generation_id: str, dest_path: str, *, api_key: str | None = None, api_base: str | None = None) -> str:
+    """GET /generations/{id}/output?format=glb (compact v1)."""
+    return download_generation_output(generation_id, dest_path, api_key=api_key, api_base=api_base, format="glb")
+
+
+def download_mp4(
+    generation_id: str,
+    dest_path: str,
+    *,
+    preset: str = "standard",
+    camera_mode: str = "tracking",
+    api_key: str | None = None,
+    api_base: str | None = None,
+) -> str:
+    """GET /generations/{id}/output?format=mp4&preset=&camera_mode= (compact v1)."""
+    return download_generation_output(
+        generation_id,
+        dest_path,
+        api_key=api_key,
+        api_base=api_base,
+        format="mp4",
+        preset=preset,
+        camera_mode=camera_mode,
+    )
 
 
 def estimate_cost(

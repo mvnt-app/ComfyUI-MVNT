@@ -1,0 +1,321 @@
+{
+  "id": "6c0f9a3e-1d2b-4c5a-9e7f-0a1b2c3d4e5f",
+  "revision": 0,
+  "last_node_id": 6,
+  "last_link_id": 6,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadAudio",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        320,
+        160
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadAudio"
+      },
+      "widgets_values": [
+        "ZankokuCut.wav",
+        null,
+        null
+      ]
+    },
+    {
+      "id": 2,
+      "type": "MVNT Audio Segment",
+      "pos": [
+        360,
+        0
+      ],
+      "size": [
+        320,
+        140
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            2,
+            3
+          ]
+        },
+        {
+          "name": "segment_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MVNT Audio Segment"
+      },
+      "widgets_values": [
+        0,
+        20
+      ]
+    },
+    {
+      "id": 3,
+      "type": "MVNT Generate Dance",
+      "pos": [
+        720,
+        0
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "dance_3d",
+          "type": "STRING",
+          "links": [
+            4,
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MVNT Generate Dance"
+      },
+      "widgets_values": [
+        "#K-Pop / All",
+        "Creative",
+        "",
+        -1,
+        0,
+        0,
+        ""
+      ]
+    },
+    {
+      "id": 4,
+      "type": "MVNTPreviewDance3D",
+      "pos": [
+        1100,
+        0
+      ],
+      "size": [
+        640,
+        560
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": 3
+        },
+        {
+          "name": "camera_info",
+          "shape": 7,
+          "type": "LOAD3D_CAMERA",
+          "link": null
+        },
+        {
+          "name": "bg_image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "model_file",
+          "type": "STRING,FILE_3D_GLB,FILE_3D_GLTF,FILE_3D_FBX,FILE_3D",
+          "widget": {
+            "name": "model_file"
+          },
+          "link": 4
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "MVNTPreviewDance3D"
+      },
+      "widgets_values": [
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 5,
+      "type": "MVNT Render Dance Video",
+      "pos": [
+        1100,
+        600
+      ],
+      "size": [
+        340,
+        180
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "dance_3d",
+          "type": "STRING",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "dance_video",
+          "type": "VIDEO",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MVNT Render Dance Video"
+      },
+      "widgets_values": [
+        "standard",
+        "tracking",
+        ""
+      ]
+    },
+    {
+      "id": 6,
+      "type": "SaveVideo",
+      "pos": [
+        1480,
+        600
+      ],
+      "size": [
+        420,
+        300
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 6
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveVideo"
+      },
+      "widgets_values": [
+        "video/MVNT",
+        "mp4",
+        "h264"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "AUDIO"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "AUDIO"
+    ],
+    [
+      3,
+      2,
+      0,
+      4,
+      0,
+      "AUDIO"
+    ],
+    [
+      4,
+      3,
+      0,
+      4,
+      3,
+      "STRING"
+    ],
+    [
+      5,
+      3,
+      0,
+      5,
+      0,
+      "STRING"
+    ],
+    [
+      6,
+      5,
+      0,
+      6,
+      0,
+      "VIDEO"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.8,
+      "offset": [
+        60,
+        60
+      ]
+    },
+    "info": {
+      "name": "MVNT compact v1",
+      "version": "2.0.0-compact",
+      "description": "Audio -> segment -> Generate (GLB) -> Preview 3D -> Render MP4 via public /v1 API."
+    },
+    "mvnt_notes": [
+      "Set MVNT_API_KEY in the environment (or the api_key widgets). Never commit keys.",
+      "Pick your own WAV in LoadAudio if ZankokuCut.wav is not in ComfyUI/input."
+    ]
+  },
+  "version": 0.4
+}

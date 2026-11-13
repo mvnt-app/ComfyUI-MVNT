@@ -15,56 +15,30 @@ https://github.com/user-attachments/assets/2fcde3de-5bd5-4fe6-8931-72198dee9ace
 
 ---
 
-## What It Does
+## What It Does (compact v1, 2.0.0-compact)
 
-ComfyUI-MVNT connects ComfyUI to the [MVNT Motion API](https://mvnt.studio/docs),
-which generates music-conditioned choreography from audio input.
+ComfyUI-MVNT mirrors the public MVNT quickstart on `https://api.mvnt.studio/v1` only:
+`GET /styles` -> `POST /generations` -> poll `GET /generations/{id}` -> `GET /generations/{id}/output?format=glb|mp4`.
 
-Drop in a track → choose a style → get an animated GLB and reference MP4 out.
-Works standalone or as part of larger character pipelines (Tripo, Kling, etc.).
-
----
+No legacy fallback, Tripo/T-pose, Kling profiles, BVH or internal render routes on this branch
+(`MVNT_COMPACT_V1=0` re-enables the old fallback in `mvnt_client.py` for local A/B only).
 
 ## Nodes
 
 | Node | What it does |
 |---|---|
-| `MVNT Audio Segment` | Selects the audio segment to send. Duration capped at 40 seconds. |
-| `MVNT Generate Dance` | Sends audio to MVNT, polls generation, returns an animated GLB. Optionally retargets motion to a connected character GLB. |
-| `MVNT Preview Dance 3D` | Shows the animated GLB in ComfyUI's native 3D preview with companion audio controls. |
-| `MVNT Image to T-Pose` | Converts a character image into a front-facing T-pose via MVNT preprocessing — for use as a retargeting reference. |
-| `MVNT Render Dance Video` | Downloads a server-rendered MP4 from the generated dance. Two profiles: `pretty` (toon studio look) and `kling` (mannequin reference for motion transfer). |
-
----
-
-## Main Flow
+| `MVNT Audio Segment` | Selects the audio segment to send (max 40 seconds). |
+| `MVNT List Styles` | `GET /v1/styles`; outputs JSON and one style name per line. |
+| `MVNT Generate Dance` | Uploads audio (`trim_start`/`trim_end`, 0 = whole clip), polls, downloads the animated GLB. |
+| `MVNT Preview Dance 3D` | Shows the GLB in ComfyUI's 3D preview with audio. |
+| `MVNT Render Dance Video` | `format=mp4` with `preset` (`standard` 1920x1080 / `shorts` 1080x1920) and `camera_mode` (`tracking`/`dynamic`/`idol`). Synchronous, can take minutes. |
 
 ```text
-Load Audio
-  → MVNT Audio Segment
-  → MVNT Generate Dance
-  → MVNT Preview Dance 3D          ← fast 3D review
-  → MVNT Render Dance Video        ← optional MP4
+Load Audio -> MVNT Audio Segment -> MVNT Generate Dance -> MVNT Preview Dance 3D
+                                                        -> MVNT Render Dance Video -> Save Video
 ```
 
-Optional character flow:
-
-```text
-character image → MVNT Image to T-Pose
-character GLB   → MVNT Generate Dance (retargeted output)
-```
-
----
-
-## Example Workflows
-
-Drag any `.json` from [`workflows/`](./workflows) into ComfyUI to load it.
-
-| Workflow | Description |
-|---|---|
-| [`MVNT4.2 - music_to_3d_dance.json`](./workflows/MVNT4.2%20-%20music_to_3d_dance.json) | Core flow: audio → animated GLB → 3D preview + optional MP4. |
-| [`mvnt_audio_to_dance.json`](./workflows/mvnt_audio_to_dance.json) | Minimal test: audio → dance output. |
-| [`mvnt_image_to_tpose.json`](./workflows/mvnt_image_to_tpose.json) | Character image → T-pose image. |
+Load [`workflows/compact_v1_api.json`](./workflows/compact_v1_api.json) for this graph.
 
 ---
 
@@ -103,7 +77,7 @@ Set it as an environment variable before launching ComfyUI:
 export MVNT_API_KEY=mvnt_live_xxxxxxxxxxxxx
 ```
 
-Or paste it directly into the `api_key` field on any node that exposes it.
+Or paste it into the `api_key` field of `MVNT Generate Dance` / `MVNT Render Dance Video`.
 
 > **Never commit API keys in workflow JSON.** If a key is accidentally committed, revoke it immediately from your MVNT dashboard.
 
@@ -111,41 +85,16 @@ Or paste it directly into the `api_key` field on any node that exposes it.
 
 ## Quick Start
 
-1. Add an audio file to `ComfyUI/input/`
-2. Load `workflows/MVNT4.2 - music_to_3d_dance.json`
-3. In `MVNT Audio Segment`, set start time and duration (max 40s)
-4. In `MVNT Generate Dance`, choose a dance style
-5. Queue — outputs land in `ComfyUI/output/`:
+1. Set `MVNT_API_KEY` (from the MVNT Platform) and optionally `MVNT_API_BASE=https://api.mvnt.studio/v1`, then start ComfyUI.
+2. Load `workflows/compact_v1_api.json` and pick a WAV in `Load Audio`.
+3. Queue. Outputs land in `ComfyUI/output/`:
 
 ```text
 mvnt_<id>.motion.glb
-mvnt_<id>.dance.fetch.mp4   # only when MVNT Render Dance Video is connected
+mvnt_<id>.<preset>.<camera_mode>.mp4   # only when MVNT Render Dance Video is connected
 ```
 
----
-
-## Character Retargeting
-
-Connect a rigged GLB to `character_glb` on `MVNT Generate Dance`.
-MVNT generates the base motion, then retargets it to your character automatically.
-The `dance_3d` output becomes the retargeted animated GLB.
-
-Works with Tripo-style GLB assets.
-
----
-
-## Advanced: Kling Motion Transfer
-
-For AI video workflows, use `video_profile: kling` in `MVNT Render Dance Video`
-to get a deterministic mannequin-style MP4 suitable as a motion reference for Kling.
-
-```text
-audio + character image
-  → MVNT T-pose + Tripo model
-  → MVNT Generate Dance
-  → MVNT Render Dance Video (kling profile)
-  → Kling motion control video
-```
+Wrong key returns a plain 401 error; there is no silent fallback to another API.
 
 ---
 
