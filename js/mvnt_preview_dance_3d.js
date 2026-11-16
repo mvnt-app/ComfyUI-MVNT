@@ -51,144 +51,110 @@ function ensureLayoutStyles() {
   if (document.getElementById(LAYOUT_STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = LAYOUT_STYLE_ID;
+  // Comfy 1.59 Viewport3d.handleResize uses canvas.parentElement.clientWidth.
+  // Do NOT use max-width:100% — that locks the canvas to a narrow Vue DOM-widget slot.
   style.textContent = `
 .${ROOT_CLASS} {
   box-sizing: border-box;
-  align-self: stretch;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+  grid-column: 1 / -1;
 }
 .${VIEWER_CLASS} {
-  width: 100% !important;
-  max-width: 100% !important;
-  min-width: 0;
-  overflow: hidden;
   box-sizing: border-box;
   position: relative;
+  overflow: hidden;
+  flex: 0 0 auto;
 }
 .${VIEWER_CLASS} > * {
+  box-sizing: border-box;
   width: 100% !important;
   height: 100% !important;
-  max-width: 100% !important;
-  box-sizing: border-box;
 }
 .${VIEWER_CLASS} canvas {
   display: block;
-  max-width: 100% !important;
-  box-sizing: border-box;
 }`;
   document.head.appendChild(style);
 }
 
-function nodeInnerWidth(node, fallback = 680) {
+/** Canvas pixel size comes from node.size — not from the (often narrow) DOM widget slot. */
+function previewDims(node) {
   const sizeW = Array.isArray(node?.size) ? Number(node.size[0]) : 0;
-  const inner = sizeW > 0 ? sizeW - 20 : fallback;
-  return Math.max(320, inner);
+  const width = Math.max(640, Math.floor((sizeW > 0 ? sizeW : 720) - 24));
+  return { width, height: VIEW_H };
 }
 
-/** Widest measured clientWidth on the DOM chain above the widget root (Comfy DOM widget slot). */
-function widgetHostWidth(state) {
-  let el = state?.root?.parentElement;
-  let best = 0;
-  for (let depth = 0; depth < 12 && el; depth += 1) {
-    const w = el.clientWidth;
-    if (w > 0) best = Math.max(best, w);
-    if (el.classList?.contains("litegraph") || el.classList?.contains("graphdialog")) break;
-    el = el.parentElement;
-  }
-  return best;
+function nodeInnerWidth(node, fallback = 680) {
+  return previewDims(node).width || fallback;
 }
 
-/** Best available horizontal space for the DOM widget (Load3d often locks to first small measure). */
-function effectiveHostWidth(state, node) {
-  const nodeW = nodeInnerWidth(node);
-  const hostW = widgetHostWidth(state);
-  const slotW = state.root?.parentElement?.clientWidth || 0;
-  const rootW = state.root?.clientWidth || 0;
-  const viewerW = state.viewer?.clientWidth || 0;
-  return Math.max(320, nodeW, hostW, slotW, rootW, viewerW);
-}
-
-function capToHost(size, hostWidth) {
-  if (!hostWidth || hostWidth <= 0) return size;
-  return Math.max(64, Math.min(size, hostWidth));
-}
-
-function measureViewerSize(state, node, contentRect = null) {
-  const ceiling = effectiveHostWidth(state, node);
-  let width = ceiling;
-  if (contentRect?.width > 0) {
-    width = Math.max(contentRect.width, ceiling * 0.85);
-  } else if (state.viewer?.clientWidth > 32) {
-    // Ignore a narrow Load3d shell; prefer the node/slot width.
-    const vw = state.viewer.clientWidth;
-    width = vw >= ceiling * 0.75 ? vw : ceiling;
-  }
-  width = Math.floor(capToHost(width, ceiling));
-  const height = VIEW_H;
-  return { width, height, hostW: ceiling };
-}
-
-function applyViewerBoxSize(state, node, width, height) {
-  if (!state.viewer) return;
+/**
+ * Force the Load3d mount box to explicit px so parentElement.clientWidth matches node width.
+ * Official Load3D gets a wide Vue containerRef; we must invent that width ourselves.
+ */
+function applyContainerBox(state, width, height) {
+  if (!state?.root || !state?.viewer) return;
   const w = Math.max(320, Math.floor(width));
   const h = Math.max(200, Math.floor(height));
-  state.viewer.style.width = `${w}px`;
+  const totalH = h + BAR_H;
+
+  for (const el of [state.root, state.viewer]) {
+    el.style.width = `${w}px`;
+    el.style.minWidth = `${w}px`;
+    el.style.maxWidth = "none";
+    el.style.boxSizing = "border-box";
+  }
   state.viewer.style.height = `${h}px`;
-  state.viewer.style.maxWidth = "100%";
-  state.viewer.style.maxHeight = `${VIEW_H}px`;
-  state.viewer.style.flex = "0 0 auto";
-  state.root.style.height = `${h + BAR_H}px`;
-  state.root.style.minHeight = `${h + BAR_H}px`;
-}
+  state.viewer.style.minHeight = `${h}px`;
+  state.root.style.height = `${totalH}px`;
+  state.root.style.minHeight = `${totalH}px`;
 
-function stretchDomWidgetAncestors(el) {
-  let parent = el?.parentElement;
-  for (let depth = 0; depth < 10 && parent; depth += 1) {
-    if (parent.classList?.contains("litegraph")) break;
-    parent.style.width = "100%";
-    parent.style.maxWidth = "100%";
-    parent.style.boxSizing = "border-box";
-    parent.style.minWidth = "0";
-    parent.style.overflow = "hidden";
-    parent = parent.parentElement;
+  // Widen Vue/LiteGraph widget ancestors so they do not clip the explicit box.
+  let el = state.root.parentElement;
+  for (let depth = 0; depth < 12 && el; depth += 1) {
+    if (el.classList?.contains("litegraph") || el.classList?.contains("graph-canvas-container")) break;
+    el.style.minWidth = `${w}px`;
+    el.style.width = "100%";
+    el.style.maxWidth = "none";
+    el.style.overflow = "visible";
+    el.style.boxSizing = "border-box";
+    el = el.parentElement;
   }
-}
 
-function clampLoad3dDom(viewer) {
-  if (!viewer) return;
-  for (const child of viewer.children) {
+  // Load3d may wrap the canvas; keep wrappers filling our explicit box.
+  for (const child of state.viewer.children) {
     child.style.width = "100%";
-    child.style.maxWidth = "100%";
     child.style.height = "100%";
+    child.style.maxWidth = "none";
     child.style.boxSizing = "border-box";
-    child.style.overflow = "hidden";
-    const canvas = child.querySelector?.("canvas") || (child.tagName === "CANVAS" ? child : null);
-    if (canvas) {
-      canvas.style.maxWidth = "100%";
-      canvas.style.display = "block";
-    }
   }
 }
 
-function syncWidgetLayout(node, state, reason = "layout", contentRect = null) {
+function load3dCreateOptions(state) {
+  const dims = () => previewDims(state.node);
+  return {
+    width: dims().width,
+    height: dims().height,
+    isViewerMode: true,
+    // Same hooks as Comfy official useLoad3d — aspect / letterbox target.
+    getDimensions: dims,
+    getZoomScale: () => {
+      try {
+        return app.canvas?.ds?.scale ?? 1;
+      } catch {
+        return 1;
+      }
+    },
+  };
+}
+
+function syncWidgetLayout(node, state, reason = "layout") {
   if (!state?.root) return;
   ensureLayoutStyles();
-  const { width, height, hostW } = measureViewerSize(state, node, contentRect);
-  state.root.style.width = "100%";
-  state.root.style.maxWidth = "100%";
-  state.root.style.minWidth = "0";
-  state.root.style.boxSizing = "border-box";
-  state.root.style.overflow = "hidden";
-  applyViewerBoxSize(state, node, width, height);
-  state.viewer.style.overflow = "hidden";
-  stretchDomWidgetAncestors(state.root);
-  clampLoad3dDom(state.viewer);
-  hardRefreshViewer(state, reason, contentRect);
+  const { width, height } = previewDims(node);
   if (Array.isArray(node.size)) {
-    const minW = Math.max(node.size[0] || 0, width + 20, 480);
+    const minW = Math.max(node.size[0] || 0, width + 24, 680);
     const minH = Math.max(node.size[1] || 0, VIEW_H + BAR_H + 120);
     if (node.size[0] < minW || node.size[1] < minH) {
       node.size[0] = minW;
@@ -196,7 +162,15 @@ function syncWidgetLayout(node, state, reason = "layout", contentRect = null) {
       node.setDirtyCanvas?.(true, true);
     }
   }
-  dbg("syncWidgetLayout", { reason, hostW, width, height, viewerW: state.viewer?.clientWidth });
+  applyContainerBox(state, width, height);
+  hardRefreshViewer(state, reason);
+  dbg("syncWidgetLayout", {
+    reason,
+    width,
+    height,
+    viewerW: state.viewer?.clientWidth,
+    canvasParentW: state.viewer3d?.domElement?.parentElement?.clientWidth,
+  });
 }
 
 function installLayoutObservers(node, state) {
@@ -210,41 +184,32 @@ function installLayoutObservers(node, state) {
     this.setDirtyCanvas?.(true, true);
     return size;
   };
-
-  if (typeof ResizeObserver !== "undefined") {
-    state.layoutObserver = new ResizeObserver((entries) => {
-      let rect = null;
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect || {};
-        if (width > 0 || height > 0) {
-          rect = {
-            width: width > 0 ? width : rect?.width,
-            height: height > 0 ? height : rect?.height,
-          };
-        }
-      }
-      syncWidgetLayout(node, state, "resize-observer", rect);
-      node.setDirtyCanvas?.(true, true);
-    });
-    const host = state.root?.parentElement;
-    if (host) state.layoutObserver.observe(host);
-    state.layoutObserver.observe(state.viewer);
-  }
 }
 
-function hardRefreshViewer(state, reason = "manual", contentRect = null) {
+/**
+ * Comfy 1.59: refreshViewport → handleResize → setSize(parent.clientWidth).
+ * So applyContainerBox MUST run first; never setSize then refreshViewport on a narrow parent.
+ */
+function hardRefreshViewer(state, reason = "manual") {
   if (!state?.viewer3d) {
     dbgw("hardRefreshViewer skipped (no viewer3d)", { reason });
     return;
   }
   try {
-    const { width, height } = measureViewerSize(state, state.node, contentRect);
+    const { width, height } = previewDims(state.node);
+    applyContainerBox(state, width, height);
     state.viewer3d.setTargetSize?.(width, height);
-    state.viewer3d.renderer?.setSize?.(width, height, false);
+    // handleResize now reads our explicit px clientWidth.
     state.viewer3d.refreshViewport?.();
     state.viewer3d.forceRender?.();
     state.viewer3d.updateStatusMouseOnViewer?.(state.viewerHover || false);
-    dbgw("hardRefreshViewer applied", { reason, width, height });
+    dbgw("hardRefreshViewer applied", {
+      reason,
+      width,
+      height,
+      viewerW: state.viewer?.clientWidth,
+      canvasParentW: state.viewer3d?.domElement?.parentElement?.clientWidth,
+    });
   } catch (error) {
     dbgw("hardRefreshViewer failed", { reason, error });
   }
@@ -752,12 +717,13 @@ function ensureDom(node) {
   if (node.__mvntPreview) return node.__mvntPreview;
 
   ensureLayoutStyles();
+  const initial = previewDims(node);
   const root = document.createElement("div");
   root.className = ROOT_CLASS;
-  root.style.cssText = `width:100%;height:${VIEW_H + BAR_H}px;display:flex;flex-direction:column;background:#f6f1e8;border-radius:8px;overflow:hidden;pointer-events:auto;box-sizing:border-box;min-width:0`;
+  root.style.cssText = `width:${initial.width}px;min-width:${initial.width}px;max-width:none;height:${VIEW_H + BAR_H}px;display:flex;flex-direction:column;background:#f6f1e8;border-radius:8px;overflow:hidden;pointer-events:auto;box-sizing:border-box`;
   const viewer = document.createElement("div");
   viewer.className = VIEWER_CLASS;
-  viewer.style.cssText = "flex:1 1 auto;width:100%;min-width:0;min-height:320px;position:relative;pointer-events:auto;background:#f6f1e8;overflow:hidden;box-sizing:border-box";
+  viewer.style.cssText = `width:${initial.width}px;min-width:${initial.width}px;max-width:none;height:${VIEW_H}px;min-height:${VIEW_H}px;position:relative;pointer-events:auto;background:#f6f1e8;overflow:hidden;box-sizing:border-box;flex:0 0 auto`;
   const bar = document.createElement("div");
   bar.style.cssText = "height:42px;display:flex;align-items:center;gap:8px;padding:6px 8px;background:#101215;pointer-events:auto";
   const play = document.createElement("button");
@@ -789,9 +755,9 @@ function ensureDom(node) {
     selectOn: ["click"],
   });
   if (widget) {
-    widget.computeSize = function computeMvntPreviewSize(width) {
-      const w = width > 0 ? width : nodeInnerWidth(node);
-      return [Math.max(480, w), VIEW_H + BAR_H];
+    widget.computeSize = function computeMvntPreviewSize() {
+      const { width } = previewDims(node);
+      return [width, VIEW_H + BAR_H];
     };
   }
 
@@ -833,7 +799,7 @@ function ensureDom(node) {
     window.addEventListener("pageshow", () => resumeAfterVisibility(state, "pageshow"));
   }
   node.__mvntPreview = state;
-  node.size = [Math.max(node.size?.[0] || 680, 680), Math.max(node.size?.[1] || 620, 620)];
+  node.size = [Math.max(node.size?.[0] || 720, 720), Math.max(node.size?.[1] || 620, 620)];
   syncWidgetLayout(node, state, "ensureDom");
   installLayoutObservers(node, state);
   return state;
@@ -1214,18 +1180,11 @@ async function mount(node, payload) {
   state.viewer3d?.dispose?.();
   state.viewer3d = null;
   state.viewer.innerHTML = "";
-  syncWidgetLayout(node, state, "pre-mount");
-  await waitForLayoutFrames(3);
-  const { width, height } = measureViewerSize(state, node);
-  applyViewerBoxSize(state, node, width, height);
-  await waitForLayoutFrames(1);
-  const { width: w2, height: h2 } = measureViewerSize(state, node);
-  state.viewer3d = load3d.create(state.viewer, {
-    width: w2,
-    height: h2,
-    isViewerMode: true,
-  });
-  clampLoad3dDom(state.viewer);
+  // Box first — createLoad3d observes resize from parent.clientWidth immediately.
+  applyContainerBox(state, previewDims(node).width, previewDims(node).height);
+  await waitForLayoutFrames(2);
+  applyContainerBox(state, previewDims(node).width, previewDims(node).height);
+  state.viewer3d = load3d.create(state.viewer, load3dCreateOptions(state));
   const loadResult = await state.viewer3d.loadModel(modelUrl);
   // Newer frontends resolve with a status string instead of throwing.
   if (typeof loadResult === "string" && loadResult !== "loaded") {
@@ -1246,7 +1205,6 @@ async function mount(node, payload) {
   updateBar(state);
   syncWidgetLayout(node, state, "post-mount");
   requestAnimationFrame(() => syncWidgetLayout(node, state, "post-mount-raf"));
-  setTimeout(() => syncWidgetLayout(node, state, "post-mount-delay"), 400);
   node.setDirtyCanvas(true, true);
 }
 
