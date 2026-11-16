@@ -111,20 +111,16 @@ Remove or rename the old custom node folder and restart ComfyUI.
 The core audio-to-dance flow has no dependency on Tripo or Kling.
 Full character workflows may require those custom nodes separately.
 
-**3D preview looks different across ComfyUI versions**
-`MVNT Preview Dance 3D` uses ComfyUI's native 3D preview. The exact viewer UI
-depends on your ComfyUI build version.
+**3D preview narrow strip / wrong size (Comfy Desktop / frontend 1.59+)**
+`MVNT Preview Dance 3D` discovers Comfy's `createLoad3d` at runtime. Frontend 1.59 sizes the WebGL
+buffer from the DOM widget's `clientWidth`, so an older extension or a cached JS file can leave a
+tall narrow viewport after click. Update the node pack (`git pull` on `main`), fully quit Desktop,
+then **Ctrl+Shift+R**. The node grows to a minimum width so the preview stays inside the card.
 
 **`Could not resolve Load3d module ... Failed to fetch dynamically imported module .../assets/load3dService-*.js`**
-The in-node viewer imports Comfy frontend's internal hashed `load3dService-<hash>.js` chunk, whose name changes every
-frontend release (seen on Comfy Desktop v0.45.3). The extension now discovers the real name at runtime
-(loaded resources, then the entry bundle, then the asset manifest) and no longer hard-codes hashes.
-If it still fails, the node shows a download link for the GLB and an audio player instead of the 3D viewer.
-The GLB is always saved as `ComfyUI/output/mvnt_<id>.motion.glb`, and `MVNT Render Dance Video` (MP4) does not depend on the viewer.
-Workarounds: update the extension (`git pull`), **Comfy Desktop fully quit → restart**, hard-refresh the Comfy window (Ctrl+Shift+R),
-and in DevTools → Network confirm `extensions/ComfyUI-MVNT/mvnt_preview_dance_3d.js` starts with
-`const STATIC_SERVICE_MODULES = []` (if you still see `Bgd80_fq` / `B9rS34_t` in that file, the browser is serving a cached old copy).
-Or open the saved GLB in any glTF viewer / Comfy's own `Load3D` node.
+Hashed frontend chunks change every release; the extension discovers them at runtime (no hard-coded hashes).
+If the viewer still fails, the node shows a GLB download / path fallback. The file is always saved as
+`ComfyUI/output/mvnt_<id>.motion.glb`; **MVNT Render Dance Video** does not need the in-node viewer.
 
 ---
 
