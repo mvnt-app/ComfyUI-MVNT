@@ -113,9 +113,23 @@ function nodeInnerWidth(node, fallback = PREVIEW_W) {
   return previewDims(node).width || fallback;
 }
 
+function styleBox(el, width, height) {
+  if (!el?.style) return;
+  el.style.width = `${width}px`;
+  el.style.minWidth = `${width}px`;
+  el.style.maxWidth = `${width}px`;
+  if (height != null) {
+    el.style.height = `${height}px`;
+    el.style.minHeight = `${height}px`;
+    el.style.maxHeight = `${height}px`;
+  }
+  el.style.boxSizing = "border-box";
+}
+
 /**
- * Size the Load3d mount box to the (now widened) node — never wider than the node card.
- * Do not set overflow:visible on ancestors (that painted outside the node).
+ * Size the Load3d mount box to the (now widened) node.
+ * Do not restyle Vue ancestors with width:100% — a click reflow then collapses clientWidth
+ * and Viewport3d.handleResize locks the canvas to that tall narrow strip.
  */
 function applyContainerBox(state, width, height) {
   if (!state?.root || !state?.viewer) return;
@@ -123,35 +137,27 @@ function applyContainerBox(state, width, height) {
   const h = Math.max(200, Math.floor(height));
   const totalH = h + BAR_H;
 
-  for (const el of [state.root, state.viewer]) {
-    el.style.width = `${w}px`;
-    el.style.minWidth = `${w}px`;
-    el.style.maxWidth = `${w}px`;
-    el.style.boxSizing = "border-box";
-  }
-  state.viewer.style.height = `${h}px`;
-  state.viewer.style.minHeight = `${h}px`;
-  state.root.style.height = `${totalH}px`;
-  state.root.style.minHeight = `${totalH}px`;
+  styleBox(state.root, w, totalH);
+  styleBox(state.viewer, w, h);
   state.root.style.overflow = "hidden";
+  state.viewer.style.overflow = "hidden";
+  state.viewer.style.flex = "0 0 auto";
 
-  // Widget slot should fill the node body width (100%), not invent a wider overflow box.
-  let el = state.root.parentElement;
-  for (let depth = 0; depth < 8 && el; depth += 1) {
-    if (el.classList?.contains("litegraph") || el.classList?.contains("graph-canvas-container")) break;
-    el.style.width = "100%";
-    el.style.maxWidth = "100%";
-    el.style.minWidth = "0";
-    el.style.overflow = "hidden";
-    el.style.boxSizing = "border-box";
-    el = el.parentElement;
-  }
-
+  // Force wrappers from canvas → viewer to the same px (handleResize reads parent.clientWidth).
   for (const child of state.viewer.children) {
-    child.style.width = "100%";
-    child.style.height = "100%";
-    child.style.maxWidth = "100%";
-    child.style.boxSizing = "border-box";
+    if (child.tagName === "CANVAS") {
+      child.style.display = "block";
+      continue;
+    }
+    styleBox(child, w, h);
+    child.style.overflow = "hidden";
+  }
+  const canvas = state.viewer3d?.domElement || state.viewer.querySelector?.("canvas");
+  let walk = canvas?.parentElement;
+  while (walk && walk !== state.viewer) {
+    styleBox(walk, w, h);
+    walk.style.overflow = "hidden";
+    walk = walk.parentElement;
   }
 }
 
@@ -165,14 +171,41 @@ function load3dCreateOptions(state) {
     height: dims().height,
     isViewerMode: true,
     getDimensions: dims,
-    getZoomScale: () => {
-      try {
-        return app.canvas?.ds?.scale ?? 1;
-      } catch {
-        return 1;
-      }
-    },
+    // Graph zoom must NOT shrink the WebGL buffer — that looks like a tall narrow strip.
+    getZoomScale: () => 1,
   };
+}
+
+/**
+ * Comfy 1.59 handleResize always does setSize(parent.clientWidth).
+ * After a node click Vue often collapses the widget slot; re-assert our px box first.
+ */
+function installHandleResizeGuard(state) {
+  const viewer3d = state?.viewer3d;
+  if (!viewer3d || viewer3d.__mvntResizeGuarded) return;
+  viewer3d.__mvntResizeGuarded = true;
+  const original = viewer3d.handleResize?.bind(viewer3d);
+  if (typeof original !== "function") return;
+
+  viewer3d.handleResize = function mvntGuardedHandleResize() {
+    const { width, height } = ensureNodeFitsPreview(state.node);
+    applyContainerBox(state, width, height);
+    const parent = viewer3d.domElement?.parentElement;
+    if (parent) styleBox(parent, width, height);
+    return original();
+  };
+
+  // Pointer/click selection reflows Vue DOM widgets — restore on next frames.
+  if (!state.clickRestoreInstalled && state.root) {
+    state.clickRestoreInstalled = true;
+    const restore = () => {
+      requestAnimationFrame(() => {
+        syncWidgetLayout(state.node, state, "pointer-restore");
+      });
+    };
+    state.root.addEventListener("pointerdown", restore, true);
+    state.root.addEventListener("click", restore, true);
+  }
 }
 
 function syncWidgetLayout(node, state, reason = "layout") {
@@ -237,9 +270,11 @@ function hardRefreshViewer(state, reason = "manual") {
     return;
   }
   try {
+    installHandleResizeGuard(state);
     const { width, height } = ensureNodeFitsPreview(state.node);
     applyContainerBox(state, width, height);
     state.viewer3d.setTargetSize?.(width, height);
+    // Goes through our guarded handleResize → parent.clientWidth is already PREVIEW_W.
     state.viewer3d.refreshViewport?.();
     state.viewer3d.forceRender?.();
     state.viewer3d.updateStatusMouseOnViewer?.(state.viewerHover || false);
@@ -1227,6 +1262,9 @@ async function mount(node, payload) {
   await waitForLayoutFrames(2);
   applyContainerBox(state, previewDims(node).width, previewDims(node).height);
   state.viewer3d = load3d.create(state.viewer, load3dCreateOptions(state));
+  installHandleResizeGuard(state);
+  applyContainerBox(state, previewDims(node).width, previewDims(node).height);
+  state.viewer3d.refreshViewport?.();
   const loadResult = await state.viewer3d.loadModel(modelUrl);
   // Newer frontends resolve with a status string instead of throwing.
   if (typeof loadResult === "string" && loadResult !== "loaded") {
