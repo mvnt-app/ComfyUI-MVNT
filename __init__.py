@@ -1,8 +1,12 @@
-"""ComfyUI-MVNT: AI dance choreography from music."""
+"""ComfyUI-MVNT: AI dance choreography from music (compact v1)."""
+
+from .env_local import load_package_env_files
+
+load_package_env_files()
 
 from .nodes import (
     MVNTAudioSegment,
-    MVNTImageToTPose,
+    MVNTListStyles,
     MVNTGenerateDance,
     MVNTRenderDanceVideo,
     MVNTPreviewDance3D,
@@ -10,7 +14,7 @@ from .nodes import (
 
 NODE_CLASS_MAPPINGS = {
     "MVNT Audio Segment": MVNTAudioSegment,
-    "MVNT Image to T-Pose": MVNTImageToTPose,
+    "MVNT List Styles": MVNTListStyles,
     "MVNT Generate Dance": MVNTGenerateDance,
     "MVNT Render Dance Video": MVNTRenderDanceVideo,
     "MVNTPreviewDance3D": MVNTPreviewDance3D,
@@ -18,7 +22,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MVNT Audio Segment": "MVNT Audio Segment",
-    "MVNT Image to T-Pose": "MVNT Image to T-Pose",
+    "MVNT List Styles": "MVNT List Styles",
     "MVNT Generate Dance": "MVNT Generate Dance",
     "MVNT Render Dance Video": "MVNT Render Dance Video",
     "MVNTPreviewDance3D": "MVNT Preview Dance 3D",

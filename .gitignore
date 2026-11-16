@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
 
+# Local API credentials (see .env.local.example)
+.env
+.env.local
+
 # Local debug/server patch scratch files
 tmp/
 tmp_*.py

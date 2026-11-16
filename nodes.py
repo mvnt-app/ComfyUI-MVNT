@@ -32,6 +32,30 @@ def _progress_bar(total=100):
     return ProgressBar(total)
 
 
+def _comfy_view_ref(abs_path):
+    """Return {filename, subfolder, type} for /view if the file lives under output/input/temp, else None."""
+    try:
+        target = os.path.normcase(os.path.abspath(abs_path))
+        for view_type, getter in (
+            ("output", folder_paths.get_output_directory),
+            ("input", folder_paths.get_input_directory),
+            ("temp", folder_paths.get_temp_directory),
+        ):
+            base = os.path.normcase(os.path.abspath(getter()))
+            if target == base or not target.startswith(base + os.sep):
+                continue
+            rel = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(getter()))
+            subfolder, filename = os.path.split(rel)
+            return {
+                "filename": filename,
+                "subfolder": subfolder.replace("\\", "/"),
+                "type": view_type,
+            }
+    except Exception:
+        return None
+    return None
+
+
 def _set_progress(progress, value):
     try:
         current = int(max(0, min(100, round(float(value)))))
@@ -128,20 +152,6 @@ def _coerce_generation_seed(seed) -> int:
         return int(seed)
     except (TypeError, ValueError):
         return -1
-
-
-MVNT_VIDEO_PROFILE_CHOICES = ["MVNT Original", "Video Reference"]
-MVNT_VIDEO_PROFILE_MAP = {
-    "MVNT Original": "pretty",
-    "Video Reference": "kling",
-    # Preserve older saved workflows that stored the raw backend values.
-    "pretty": "pretty",
-    "kling": "kling",
-}
-
-
-def _mvnt_video_profile_token(profile: str) -> str:
-    return MVNT_VIDEO_PROFILE_MAP.get(str(profile or "").strip(), "pretty")
 
 
 def _format_seconds(value) -> str:
@@ -263,7 +273,7 @@ class MVNTImageToTPose:
 # ---------------------------------------------------------------------------
 
 class MVNTGenerateDance:
-    """Generate MVNT dance output from music, with optional Tripo-style character input."""
+    """Generate a MVNT dance GLB from music via the compact public v1 API."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -274,9 +284,11 @@ class MVNTGenerateDance:
                 "creative_level": (MVNT_CREATIVE_LEVELS, {"default": "Creative"}),
             },
             "optional": {
-                "character_glb": ("*",),
                 "api_key": ("STRING", {"default": "", "multiline": False}),
                 "seed": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1, "control_after_generate": False, "advanced": True}),
+                "trim_start": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1, "advanced": True}),
+                "trim_end": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1, "advanced": True}),
+                "style_name": ("STRING", {"default": "", "multiline": False, "advanced": True}),
             },
         }
 
@@ -285,8 +297,9 @@ class MVNTGenerateDance:
     FUNCTION = "generate"
     CATEGORY = "MVNT"
     DESCRIPTION = (
-        "Generate dance from audio and return the animated GLB path. No VIDEO output here — use "
-        "MVNT Render Dance Video after this node only when you need the server MP4 preview."
+        "POST /v1/generations, poll, then download the animated GLB path. trim_end 0 = whole uploaded audio "
+        "(use MVNT Audio Segment first). style_name overrides the style dropdown with a name from GET /v1/styles. "
+        "Use MVNT Render Dance Video for the MP4."
     )
 
     def generate(
@@ -294,9 +307,11 @@ class MVNTGenerateDance:
         audio,
         style="All",
         creative_level="Creative",
-        character_glb=None,
         api_key="",
         seed=-1,
+        trim_start=0.0,
+        trim_end=0.0,
+        style_name="",
     ):
         progress = _progress_bar()
         _set_progress(progress, 1)
@@ -306,43 +321,31 @@ class MVNTGenerateDance:
             f"[MVNT Generate Dance] upload audio_path={audio_path} "
             f"duration={_format_seconds(audio_duration_sec)}"
         )
-        print(f"[MVNT Generate Dance] raw character_glb={character_glb!r}")
-        character_path = _coerce_optional_file_path(character_glb)
-        print(f"[MVNT Generate Dance] resolved character_path={character_path!r}")
-        if character_glb and not character_path:
-            raise RuntimeError(f"character_glb was connected, but MVNT could not resolve it to a local file path: {character_glb!r}")
-        if _is_default_mannequin_asset(character_path):
-            print(
-                "[MVNT Generate Dance] default mannequin/mumu asset was connected to character_glb; "
-                "skipping Tripo retarget and using the server hard-yaw mannequin GLB output."
-            )
-            character_path = ""
-        if character_path:
-            print(f"[MVNT Generate Dance] character_glb resolved: {character_path}")
 
         try:
             creative_level, api_key = _repair_generate_dance_widget_shift(creative_level, api_key)
             creative = MVNT_CREATIVE_LEVEL_MAP.get(str(creative_level or "").strip(), MVNT_CREATIVE_LEVEL_MAP["Creative"])
             generation_seed = _coerce_generation_seed(seed)
+            style_token = str(style_name or "").strip() or _mvnt_style_token(style)
+            segment_start, segment_end = _resolve_trim_window(trim_start, trim_end, audio_duration_sec)
             _set_progress(progress, 5)
             result = mvnt_client.create_generation(
                 audio_path,
                 api_key=api_key or None,
                 api_base=None,
-                character_path=None,
-                style=_mvnt_style_token(style),
-                output_format="glb",
-                output_mode="both",
-                preview_style="mannequin",
+                style=style_token,
                 seed=generation_seed,
                 guidance=creative["guidance"],
                 temperature=creative["temperature"],
                 mode=creative["mode"],
-                save_hard_yaw_lock_variant=True,
-                trim_start=0.0,
-                trim_end=0.0,
+                trim_start=segment_start,
+                trim_end=segment_end,
             )
             gen_id = mvnt_client.generation_id_from_response(result)
+            print(
+                f"[MVNT Generate Dance] generation id={gen_id} style={style_token} "
+                f"trim={segment_start}-{segment_end} charged={result.get('charged_amount')}"
+            )
             _set_progress(progress, 10)
 
             mvnt_client.poll_generation(
@@ -358,44 +361,23 @@ class MVNTGenerateDance:
             audio_copy_path = os.path.join(out_dir, f"mvnt_{gen_id}.audio.wav")
             shutil.copyfile(audio_path, audio_copy_path)
 
-            motion_glb = _download_glb_output(
+            dance_3d = mvnt_client.download_glb(
                 gen_id,
                 motion_glb_path,
                 api_key=api_key or None,
                 api_base=None,
             )
-            _set_progress(progress, 88)
-
-            if not motion_glb:
-                raise RuntimeError(
-                    "MVNT did not return a GLB output for this generation. "
-                    "The Comfy 3D preview expects GLB, so FBX/BVH fallback is not returned as dance_3d."
-                )
-
-            dance_3d = motion_glb
-            if character_path:
-                retargeted_glb_path = os.path.join(out_dir, f"mvnt_{gen_id}.tripo_retargeted.glb")
-                print(
-                    f"[MVNT Generate Dance] retargeting motion_glb={motion_glb} "
-                    f"character_glb={character_path} -> {retargeted_glb_path}"
-                )
-                dance_3d = mvnt_client.retarget_tripo_glb(
-                    motion_glb,
-                    character_path,
-                    retargeted_glb_path,
-                    api_key=api_key or None,
-                    api_base=None,
-                )
-                _set_progress(progress, 94)
+            _set_progress(progress, 95)
 
             _write_render_sidecar(
                 dance_3d,
                 {
                     "job_id": gen_id,
-                    "motion_glb": motion_glb,
-                    "character_glb": character_path or "",
+                    "motion_glb": dance_3d,
                     "audio": audio_copy_path,
-                    "dance_3d": dance_3d,
+                    "style": style_token,
+                    "trim_start": segment_start,
+                    "trim_end": segment_end,
                     "creative_level": creative_level,
                     "seed": generation_seed,
                 },
@@ -411,9 +393,12 @@ class MVNTGenerateDance:
 # Render Dance Video (optional second step)
 # ---------------------------------------------------------------------------
 
+MVNT_MP4_PRESETS = ["standard", "shorts"]
+MVNT_CAMERA_MODES = ["tracking", "dynamic", "idol"]
+
 
 class MVNTRenderDanceVideo:
-    """Render/download the server MP4 for a generated MVNT dance GLB."""
+    """Download the server-rendered MP4 for a generated MVNT dance via the compact public v1 API."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -422,7 +407,9 @@ class MVNTRenderDanceVideo:
                 "dance_3d": ("STRING", {"default": "", "multiline": False, "forceInput": True}),
             },
             "optional": {
-                "video_profile": (MVNT_VIDEO_PROFILE_CHOICES, {"default": "MVNT Original"}),
+                "preset": (MVNT_MP4_PRESETS, {"default": "standard"}),
+                "camera_mode": (MVNT_CAMERA_MODES, {"default": "tracking"}),
+                "api_key": ("STRING", {"default": "", "multiline": False}),
             },
         }
 
@@ -431,11 +418,12 @@ class MVNTRenderDanceVideo:
     FUNCTION = "render"
     CATEGORY = "MVNT"
     DESCRIPTION = (
-        "Optional server MP4 render. Connect dance_3d from MVNT Generate Dance; the node infers the job_id "
-        "from the generated GLB filename. No API key widget here. Kling/video-AI stays downstream."
+        "GET /v1/generations/{id}/output?format=mp4. Connect dance_3d from MVNT Generate Dance; the job id is "
+        "inferred from the GLB filename. preset standard = 1920x1080, shorts = 1080x1920. The request is "
+        "synchronous and can take several minutes. api_key empty = MVNT_API_KEY env."
     )
 
-    def render(self, dance_3d, video_profile="MVNT Original"):
+    def render(self, dance_3d, preset="standard", camera_mode="tracking", api_key=""):
         dance_path = _coerce_optional_file_path(dance_3d)
         jid = _job_id_from_generated_dance_path(dance_path or str(dance_3d or ""))
         if not jid:
@@ -445,67 +433,25 @@ class MVNTRenderDanceVideo:
             )
         if InputImpl is None:
             raise RuntimeError("Comfy Video API is unavailable in this ComfyUI build.")
+        preset = preset if preset in MVNT_MP4_PRESETS else "standard"
+        camera_mode = camera_mode if camera_mode in MVNT_CAMERA_MODES else "tracking"
 
         progress = _progress_bar()
         _set_progress(progress, 5)
         out_dir = folder_paths.get_output_directory()
-        profile_token = _mvnt_video_profile_token(video_profile)
-        sidecar = _read_render_sidecar(dance_path) if dance_path else {}
-        path = ""
-        internal_error = None
-
-        # Prefer rendering from the actual dance_3d GLB so retargeted characters appear in MP4.
-        if dance_path and os.path.isfile(dance_path):
-            _set_progress(progress, 20)
-            internal_dest = os.path.join(out_dir, f"mvnt_{jid}.dance.internal.mp4")
-            try:
-                character_glb = _coerce_optional_file_path(sidecar.get("character_glb", ""))
-                audio_file = _coerce_optional_file_path(sidecar.get("audio", ""))
-                path, meta = mvnt_client.render_internal_scene_video(
-                    jid,
-                    internal_dest,
-                    render_profile=profile_token,
-                    source_animated_glb_path=dance_path,
-                    character_glb_path=character_glb or None,
-                    audio_path=audio_file or None,
-                    api_base=None,
-                )
-                if path and os.path.isfile(path):
-                    print(
-                        f"[MVNT Render Dance Video] internal render success "
-                        f"job_id={jid} profile={profile_token} source={dance_path}"
-                    )
-                else:
-                    print(
-                        f"[MVNT Render Dance Video] internal render returned no mp4 "
-                        f"job_id={jid} profile={profile_token} meta={meta}"
-                    )
-            except Exception as exc:
-                internal_error = exc
-                print(f"[MVNT Render Dance Video] internal render failed for {jid}: {exc}")
-
-        if not path:
-            _set_progress(progress, 55)
-            dest = os.path.join(out_dir, f"mvnt_{jid}.dance.fetch.mp4")
-            path = _download_video_output(
-                jid,
-                dest,
-                api_key=None,
-                api_base=None,
-                video_profile=profile_token,
-            )
+        dest = os.path.join(out_dir, f"mvnt_{jid}.{preset}.{camera_mode}.mp4")
+        print(f"[MVNT Render Dance Video] job_id={jid} preset={preset} camera_mode={camera_mode}")
+        path = mvnt_client.download_mp4(
+            jid,
+            dest,
+            preset=preset,
+            camera_mode=camera_mode,
+            api_key=api_key or None,
+            api_base=None,
+        )
         _set_progress(progress, 95)
         if not path or not os.path.isfile(path):
-            hint = (
-                f" Internal render upload also failed: {internal_error}"
-                if internal_error
-                else " Internal render upload returned no MP4."
-            )
-            raise RuntimeError(
-                "MVNT did not return an MP4 for this job_id. "
-                "Confirm the job finished and /render-mp4-lda (or v1 render output) is reachable."
-                + hint
-            )
+            raise RuntimeError("MVNT did not return an MP4 for this job_id.")
         _set_progress(progress, 100)
         return (InputImpl.VideoFromFile(path),)
 
@@ -560,12 +506,18 @@ class MVNTPreviewDance3D(MVNTPreviewBase):
         camera_info = kwargs.get("camera_info", None)
         bg_image = kwargs.get("bg_image", None)
         audio_ui = UI.PreviewAudio(audio, cls=cls).as_dict().get("audio", []) if audio is not None else []
+        model_abs_path = os.path.abspath(model_path)
         ui = {}
         ui.update(UI.PreviewUI3D(model_path, camera_info, bg_image=bg_image).as_dict())
         ui["mvnt_preview"] = [{
             "model_file": model_path,
+            "model_abs_path": model_abs_path,
+            "model_dir": os.path.dirname(model_abs_path),
+            "model_view": _comfy_view_ref(model_abs_path),
             "audio": audio_ui,
         }]
+        # Plain-text fallback so the GLB location is always visible even when the in-node 3D viewer cannot mount.
+        ui["text"] = [f"GLB: {model_abs_path}"]
         return IO.NodeOutput(ui=ui)
 
     process = execute
@@ -587,19 +539,23 @@ class MVNTListStyles:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("styles_json",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("styles_json", "style_names")
     FUNCTION = "list_styles"
     CATEGORY = "MVNT"
-    DESCRIPTION = "List all available dance styles from the MVNT API."
+    OUTPUT_NODE = True
+    DESCRIPTION = "GET /v1/styles. Use a returned name in MVNT Generate Dance style_name."
 
     def list_styles(self, api_key=""):
-        import json
         progress = _progress_bar()
         _set_progress(progress, 10)
         styles = mvnt_client.list_styles(api_key=api_key or None)
+        names = "\n".join(mvnt_client.style_names(styles))
         _set_progress(progress, 100)
-        return (json.dumps(styles, indent=2),)
+        return {
+            "ui": {"text": [names]},
+            "result": (json.dumps(styles, indent=2, ensure_ascii=False), names),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1299,53 +1255,19 @@ def _first_character_output_url(data) -> str:
     return ""
 
 
-def _download_glb_output(gen_id, dest, *, api_key, api_base):
-    """Download the previewable motion GLB, trying the API shapes used across MVNT deployments."""
-    attempts = (
-        {"kind": "3d", "format": "glb", "variant": "hard_yaw_lock"},
-        {"kind": "motion", "format": "glb", "variant": "hard_yaw_lock"},
-        {"kind": "animated", "format": "glb", "variant": "hard_yaw_lock"},
-        {"format": "glb", "variant": "hard_yaw_lock"},
-        {"kind": "3d", "format": "glb"},
-        {"kind": "motion", "format": "glb"},
-        {"kind": "animated", "format": "glb"},
-        {"format": "glb"},
-    )
-    for params in attempts:
-        result = mvnt_client.download_generation_output(
-            gen_id,
-            dest,
-            api_key=api_key,
-            api_base=api_base,
-            allow_missing=True,
-            **params,
-        )
-        if result:
-            return result
-    return ""
-
-
-def _download_video_output(gen_id, dest, *, api_key, api_base, video_profile="pretty"):
-    """Download the server-rendered MP4 video for the dance output slot."""
-    profile = video_profile if video_profile in {"pretty", "kling"} else "pretty"
-    attempts = (
-        {"kind": "render", "format": "mp4", "render_profile": profile, "width": 670, "height": 400, "fps": 30},
-        {"kind": "video", "format": "mp4", "render_profile": profile, "width": 670, "height": 400, "fps": 30},
-        {"kind": "preview", "format": "mp4", "render_profile": profile, "width": 670, "height": 400, "fps": 30},
-        {"format": "mp4", "render_profile": profile, "width": 670, "height": 400, "fps": 30},
-    )
-    for params in attempts:
-        result = mvnt_client.download_generation_output(
-            gen_id,
-            dest,
-            api_key=api_key,
-            api_base=api_base,
-            allow_missing=True,
-            **params,
-        )
-        if result:
-            return result
-    return ""
+def _resolve_trim_window(trim_start, trim_end, audio_duration):
+    """Billable window in seconds on the uploaded audio. trim_end 0 = whole clip."""
+    try:
+        start = max(0.0, float(trim_start or 0.0))
+        end = float(trim_end or 0.0)
+    except (TypeError, ValueError):
+        start, end = 0.0, 0.0
+    if audio_duration:
+        end = min(end, audio_duration) if end > 0 else audio_duration
+        start = min(start, max(0.0, end - 0.1))
+    if end > 0 and end <= start:
+        raise ValueError(f"trim_end ({end}) must be greater than trim_start ({start}).")
+    return round(start, 3), round(end, 3)
 
 
 def _render_sidecar_path(dance_path: str) -> str:
